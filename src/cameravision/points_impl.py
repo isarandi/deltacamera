@@ -20,10 +20,10 @@ def make(p, old_camera, new_camera, precomp):
     if old_lens == LensType.NONE and new_lens == LensType.NONE:
         return make_no_distortion(
             p,
-            new_camera.intrinsic_matrix,
-            new_camera.R,
-            old_camera.R,
             old_camera.intrinsic_matrix,
+            old_camera.R,
+            new_camera.R,
+            new_camera.intrinsic_matrix,
         )
 
     # USUAL

@@ -33,9 +33,9 @@ def backproject_K_deptharr(points, K, depth_arr, dst):
     K00_inv = _1 / K[0, 0]
     K11_inv = _1 / K[1, 1]
     for i in numba.prange(n_points):
-        y_out = (points[i, 1] - K12) * K11_inv * depth_arr[i]
-        dst[i, 0] = (points[i, 0] - K02 - y_out * K01) * K00_inv * depth_arr[i]
-        dst[i, 1] = y_out
+        y_n = (points[i, 1] - K12) * K11_inv
+        dst[i, 0] = (points[i, 0] - K02 - y_n * K01) * K00_inv * depth_arr[i]
+        dst[i, 1] = y_n * depth_arr[i]
         dst[i, 2] = depth_arr[i]
     return dst
 
@@ -51,9 +51,9 @@ def backproject_K_depthval(points, K, depth_val, dst):
     K02 = K[0, 2]
     K12 = K[1, 2]
     for i in numba.prange(n_points):
-        y_out = (points[i, 1] - K12) * depth_per_k11
-        dst[i, 0] = (points[i, 0] - K02 - y_out * K01) * depth_per_k00
-        dst[i, 1] = y_out
+        y_n = (points[i, 1] - K12)
+        dst[i, 0] = (points[i, 0] - K02 - y_n * K01) * depth_per_k00
+        dst[i, 1] = y_n * depth_per_k11
         dst[i, 2] = depth_val
     return dst
 
@@ -455,7 +455,7 @@ def reproject_full(points, K_old, R_old, R_new, K_new):
             inv_z = _1 / out_z
             points_new[i, 0] = (H00 * in_x + H01 * in_y + H02) * inv_z
             points_new[i, 1] = (H10 * in_x + H11 * in_y + H12) * inv_z
-    return points
+    return points_new
 
 
 @numba.njit(error_model='numpy', cache=True)

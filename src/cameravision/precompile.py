@@ -29,7 +29,7 @@ def precompile():
         cameravision.reproject_image(
             im, cam1, cam2, imshape, precomp_undist_maps=False, use_linear_srgb=True
         )
-        cameravision.reproject_image_points(points, cam1, cam2, imshape)
+        cameravision.reproject_image_points(points, cam1, cam2)
         cameravision.reproject_mask(im, cam1, cam2, imshape)
         for imshape1, imshape2 in itertools.product([imshape, None], repeat=2):
             cameravision.validity.get_valid_poly_reproj(

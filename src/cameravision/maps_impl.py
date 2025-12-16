@@ -805,7 +805,7 @@ def apply_fisheye_map_inplace(points, map, r_max):
     map_factor_new = np.float32(map.shape[0] - 1) / (r_max * r_max)
     for i in numba.prange(points.shape[0]):
         rn2 = points[i, 0] * points[i, 0] + points[i, 1] * points[i, 1]
-        if rn2 <= r_max * r_max:
+        if rn2 < r_max * r_max:
             s = map[np.int64(np.rint(rn2 * map_factor_new))]
             points[i, 0] *= s
             points[i, 1] *= s
