@@ -301,6 +301,13 @@ def reproject_box_side_midpoints(old_box, old_camera, new_camera):
     return boxlib.bb_of_points(new_side_midpoints)
 
 
+def reproject_box_inscribed_ellipse(old_box, old_camera, new_camera):
+    """Reprojects a bounding box from one camera to another using its inscribed ellipse."""
+    old_ellipse_points = boxlib.inscribed_ellipse_points(old_box, n_angles=64, n_radii=16)
+    new_ellipse_points = reproject_image_points(old_ellipse_points, old_camera, new_camera)
+    return boxlib.bb_of_points(new_ellipse_points)
+
+
 def reproject_image_fast(
     image,
     old_camera,
