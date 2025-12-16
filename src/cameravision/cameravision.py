@@ -790,6 +790,20 @@ def from_homogeneous(points):
 
 
 def visible_subbox(old_camera, new_camera, old_imshape, new_box):
+    """Compute the sub-box of `new_box` that would contain valid pixels when reprojecting.
+
+    In other words, compute the part of `new_box` (from `new_camera`'s POV) that has pixels
+    that are visible in `old_camera`'s  image of shape `old_imshape`.
+
+    Args:
+        old_camera: the original camera
+        new_camera: the new camera
+        old_imshape: shape of the image of the old camera (height, width)
+        new_box: box in the new camera image (x, y, w, h)
+
+    Returns:
+        The sub-box of `new_box` (x, y, w, h) as described.
+    """
     valid_poly = cameravision.validity.get_valid_poly_reproj(
         old_camera, new_camera, old_imshape[:2], None
     )

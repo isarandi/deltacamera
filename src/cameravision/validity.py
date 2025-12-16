@@ -512,7 +512,13 @@ def solve_cubic_smallest_nonneg_root(a, b, c, d):
         return x if x >= 0 else _inf
 
 
+# =============================================================================
+# Shapely polygon helpers
+# =============================================================================
+
+
 def clean_up_polygon(geom):
+    """Extract Polygon/MultiPolygon from GeometryCollection after boolean ops."""
     if isinstance(geom, (Polygon, MultiPolygon)):
         return geom
 
@@ -798,6 +804,11 @@ def rot_and_clip_shapely_to_front_space(polygon, R, eps=1e-3):
         raise ValueError("Invalid polygon type.")
 
 
+# =============================================================================
+# Valid distortion region (fisheye / Kannala-Brandt)
+# =============================================================================
+
+
 def fisheye_valid_r_max_cached(d):
     return _fisheye_valid_r_max_cached(d.astype(np.float32).tobytes())
 
@@ -809,6 +820,11 @@ def _fisheye_valid_r_max_cached(d):
 
 @numba.njit(error_model='numpy', cache=True)
 def fisheye_valid_r_max(d):
+    """Find the maximum valid radius for fisheye distortion.
+
+    Returns (ru, rd) where ru is the max undistorted radius and rd is the corresponding
+    distorted radius. Beyond this, the distortion mapping is no longer monotonic.
+    """
     n_steps = 32
     d0, d1, d2, d3 = d
     _0 = np.float32(0)
@@ -819,6 +835,7 @@ def fisheye_valid_r_max(d):
     _7_d2 = d2 * np.float32(7)
     _9_d3 = d3 * np.float32(9)
 
+    # Line search: find where derivative of distortion first becomes negative
     t = np.float32(0.1)
     step = (_hpi - t) / n_steps
     for i in range(n_steps):
@@ -829,11 +846,13 @@ def fisheye_valid_r_max(d):
             break
         t += step
     else:
+        # Derivative never became negative, valid up to pi/2
         t = _hpi
         t2 = t * t
         rd = t * (_1 + t2 * (d0 + t2 * (d1 + t2 * (d2 + t2 * d3))))
         return np.float32(np.inf), rd
 
+    # Newton refinement: find exact zero of derivative
     _6_d0 = d0 * np.float32(6)
     _20_d1 = d1 * np.float32(20)
     _42_d2 = d2 * np.float32(42)
@@ -854,10 +873,25 @@ def fisheye_valid_r_max(d):
 def get_optimal_undistorted_intrinsics(
     old_camera: "Camera", old_imshape, new_imshape, alpha, center_principal_point=False
 ):
+    """Compute optimal intrinsics for undistorting an image, similar to cv2.getOptimalNewCameraMatrix.
+
+    Args:
+        old_camera: Original distorted camera.
+        old_imshape: Shape of original image (h, w).
+        new_imshape: Desired output shape (h, w), or None for automatic.
+        alpha: Balance between keeping all pixels (1) vs no black borders (0).
+        center_principal_point: If True, keep principal point at image center.
+
+    Returns:
+        Tuple of (new_intrinsic_matrix, crop_box, valid_polygon).
+    """
+    # Create undistorted camera with square pixels and no skew
     new_camera = old_camera.copy()
     new_camera.distortion_coeffs = None
     new_camera.square_pixels()
     new_camera.intrinsic_matrix[0, 1] = 0
+
+    # Get valid region polygon and its bounding box (outer_box)
     valid_poly: shapely.Polygon = cameravision.validity.get_valid_poly_reproj(
         old_camera, new_camera, old_imshape, imshape_new=None
     )
@@ -871,6 +905,7 @@ def get_optimal_undistorted_intrinsics(
     else:
         delta = -outer_box[:2]
 
+    # Find inner_box (largest valid rect) and outer_box (full valid region bounds)
     valid_poly = shapely.affinity.translate(valid_poly, xoff=delta[0], yoff=delta[1])
     valid_mask = RLEMask.from_polygon(
         np.array(valid_poly.exterior.coords), (outer_box[3], outer_box[2])
@@ -881,8 +916,7 @@ def get_optimal_undistorted_intrinsics(
             inner_box = valid_mask.largest_interior_rectangle_around(
                 rendered_principal_point, aspect_ratio
             )
-            # expand outer box to have the correct aspect ratio and also the correct center
-            # first expand it to have the correct center
+            # Expand outer_box to be centered on principal point
             pp = new_camera.intrinsic_matrix[:2, 2]
             new_width = max(pp[0] - outer_box[0], outer_box[0] + outer_box[2] - pp[0]) * 2
             new_height = max(pp[1] - outer_box[1], outer_box[1] + outer_box[3] - pp[1]) * 2
@@ -893,7 +927,7 @@ def get_optimal_undistorted_intrinsics(
         else:
             inner_box = valid_mask.largest_interior_rectangle(aspect_ratio).astype(np.float32)
 
-        # expand outer box to have the correct aspect ratio
+        # Expand outer_box to match target aspect ratio
         box_aspect = outer_box[2] / outer_box[3]
         if box_aspect < aspect_ratio:
             new_width = outer_box[3] * aspect_ratio
@@ -909,8 +943,11 @@ def get_optimal_undistorted_intrinsics(
         else:
             inner_box = valid_mask.largest_interior_rectangle().astype(np.float32)
 
+    # Blend between inner (no black borders) and outer (keep all pixels) based on alpha
     inner_box[:2] -= delta
     box = inner_box * (1 - alpha) + outer_box * alpha
+
+    # Scale to target resolution
     factor = new_imshape[1] / box[2] if new_imshape is not None else 1
     intr_before_shift = new_camera.intrinsic_matrix.copy()
     new_camera.shift_image(-box[:2])
@@ -919,6 +956,7 @@ def get_optimal_undistorted_intrinsics(
         if center_principal_point:
             new_camera.center_principal_point(new_imshape)
 
+    # Transform boxes and polygon to final output coordinates
     shift = new_camera.intrinsic_matrix[:2, 2] - factor * intr_before_shift[:2, 2]
     inner_box[:] *= factor
     outer_box[:] *= factor
