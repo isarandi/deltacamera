@@ -1,9 +1,5 @@
 [build-system]
-requires = [
-    "setuptools>=42",
-    "wheel",
-    "setuptools_scm[toml]>=8",
-]
+requires = ["setuptools>=64", "wheel", "setuptools_scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -15,39 +11,81 @@ authors = [
 ]
 readme = "README.md"
 requires-python = ">=3.9"
-license = "MIT"
+license = { file = "LICENSE" }
 
-dependencies = [
-    'opencv-python',
-    'numpy',
-    'scipy',
-    'numba',
-    'shapely',
-    'msgpack-numpy',
-    'boxlib',
+keywords = [
+    "camera",
+    "calibration",
+    "computer-vision",
+    "image-warping",
+    "distortion",
+    "lens-distortion",
+    "reprojection",
 ]
 
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Scientific/Engineering :: Image Processing",
     "Topic :: Scientific/Engineering :: Information Analysis",
     "Topic :: Software Development :: Libraries",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
-    "Operating System :: POSIX :: Linux"
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+]
+
+dependencies = [
+    "opencv-python",
+    "numpy",
+    "scipy",
+    "numba",
+    "shapely",
+    "msgpack-numpy",
+    "boxlib",
+    "rlemasklib",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0",
+    "pytest-cov",
+]
+lint = [
+    "ruff",
+    "pre-commit",
+]
+docs = [
+    "sphinx",
+    "pydata-sphinx-theme",
+    "sphinx-autoapi",
+    "sphinxcontrib-bibtex",
+    "sphinx-markdown-builder",
+    "setuptools-scm",
+    "toml",
+]
+dev = [
+    "cameravision[test,lint,docs]",
 ]
 
 [project.urls]
 Homepage = "https://github.com/isarandi/cameravision"
 Repository = "https://github.com/isarandi/cameravision"
+Documentation = "https://cameravision.readthedocs.io/"
 Issues = "https://github.com/isarandi/cameravision/issues"
+Changelog = "https://github.com/isarandi/cameravision/releases"
 Author = "https://istvansarandi.com"
 
 [tool.setuptools_scm]
 version_scheme = "guess-next-dev"
 local_scheme = "no-local-version"
-write_to = "src/cameravision/_version.py"
+version_file = "src/cameravision/_version.py"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
@@ -55,6 +93,15 @@ package-dir = { "" = "src" }
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.black]
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+
+[tool.ruff]
 line-length = 99
-skip-string-normalization = true
+target-version = "py39"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
