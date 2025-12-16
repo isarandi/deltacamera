@@ -18,12 +18,17 @@ if TYPE_CHECKING:
     from cameravision import Camera
 
 
+# =============================================================================
+# Valid distortion region (Brown-Conrady)
+# =============================================================================
+
+
 def get_valid_distortion_region(
     camera: "Camera",
     limit: float = 5,
     n_vertices: int = 128,
     n_vertices_coarse: int = 24,
-    n_steps_line_search: int = 30,
+    n_steps_line_search: int = 100,
     n_iter_newton: int = 3,
     cartesian: bool = True,
 ) -> np.ndarray:
@@ -197,6 +202,8 @@ def shape_apply_intrinsics(camera, shape):
 def _get_valid_distortion_region_polar(
     d, limit, n_bins, n_bins_coarse, n_steps_line_search, n_iter_newton
 ):
+    """Find valid region boundary in polar coordinates via coarse-to-fine search."""
+    # Limit search to avoid rational distortion asymptote (denominator zero)
     asymptote_limit = np.sqrt(solve_cubic_smallest_nonneg_root(d[7], d[6], d[5], np.float32(1)))
     limit = np.minimum(limit, asymptote_limit)
 
@@ -204,10 +211,12 @@ def _get_valid_distortion_region_polar(
     _pi = np.float32(np.pi)
     theta = np.linspace(-_pi, _pi, n_bins_coarse)[:-1].astype(np.float32)
 
+    # Coarse line search
     radii = line_search(theta, d, n_steps=n_steps_line_search, limit=limit)
     theta = np.concatenate((theta, theta[:1] + _2_pi), axis=0)
     radii = np.concatenate((radii, radii[:1]), axis=0)
 
+    # Interpolate to dense sampling and refine with Newton
     theta_dense = np.linspace(-_pi, _pi, n_bins)[:-1].astype(np.float32)
     radii_dense = np.interp(theta_dense, theta, radii).astype(np.float32)
     isinf = np.isinf(radii_dense)
@@ -219,17 +228,21 @@ def _get_valid_distortion_region_polar(
     else:
         radii_dense = newton_optimize(radii_dense, theta_dense, d, n_iter=n_iter_newton)
     radii_dense = np.minimum(radii_dense, limit)
+    radii_dense[radii_dense < 0] = 0  # Divergence symptom
 
+    # Convert boundary to distorted space
     pu = polar_to_cartesian(radii_dense, theta_dense)
     pn = cameravision.distortion._distort_points(
         pu, d, polar_ud_valid=None, check_validity=False, clip_to_valid=False, dst=pu
     )
     radii_dense_distorted, theta_dense_distorted = cartesian_to_polar(pn)
 
+    # Sort by angle (distortion may reorder points)
     order_distorted = np.argsort(theta_dense_distorted)
     radii_dense_distorted = radii_dense_distorted[order_distorted]
     theta_dense_distorted = theta_dense_distorted[order_distorted]
 
+    # Wrap around for interpolation continuity
     theta_dense_distorted = np.concatenate(
         (
             theta_dense_distorted[-1:] - _2_pi,
@@ -278,7 +291,10 @@ def cartesian_to_polar(xy):
 
 @numba.njit(error_model='numpy', cache=True)
 def line_search(t, d, n_steps, limit):
-    r = np.linspace(np.float32(0), limit, n_steps).astype(np.float32)
+    # Spacing is denser near origin where boundary typically lies
+    # must use astype because numba's linspace has no dtype argument
+    u = np.linspace(np.float32(0), np.float32(1), n_steps).astype(np.float32)
+    r = u ** np.float32(1.5) * limit
     jac_det = jacobian_det_polar(r[np.newaxis, :], t[:, np.newaxis], d)
     r_out = np.empty_like(t)
     for i in range(jac_det.shape[0]):
@@ -302,6 +318,11 @@ def newton_optimize(r, t, d, n_iter):
 
 @numba.njit(error_model='numpy', cache=True)
 def jacobian_det_polar(r, t, d):
+    """Jacobian determinant of the Brown-Conrady distortion at polar coords (r, t).
+
+    Returns det(J) where J = d(x_distorted, y_distorted) / d(x, y).
+    Zero crossings mark the boundary where distortion becomes non-invertible.
+    """
     k0, k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11 = d
 
     _1 = np.float32(1)
