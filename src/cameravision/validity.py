@@ -468,7 +468,7 @@ def solve_cubic_smallest_nonneg_root(a, b, c, d):
     h = ((g**_2) / _4) + ((f**_3) / _27)
 
     if f == 0 and g == 0 and h == 0:
-        x = np.cbrt(d / a)
+        x = -b / (_3 * a)
         return x if x >= 0 else _inf
     elif h <= 0:
         i = np.sqrt(g**_2 / _4 - h)
