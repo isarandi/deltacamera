@@ -1,4 +1,4 @@
-"""Sphinx configuration for cameravision documentation."""
+"""Sphinx configuration for lensform documentation."""
 
 import importlib
 import os

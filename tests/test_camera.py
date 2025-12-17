@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-import cameravision
+import lensform
 from conftest import random_rotation_matrix
 
 
@@ -28,7 +28,7 @@ class TestCameraWorldTransforms:
 
     def test_identity_camera(self):
         """Identity camera should not change world coordinates."""
-        camera = cameravision.Camera()
+        camera = lensform.Camera()
         world_points = np.random.randn(50, 3).astype(np.float32)
 
         camera_points = camera.world_to_camera(world_points)

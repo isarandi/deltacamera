@@ -1,11 +1,11 @@
 import numba
 import numpy as np
 
-import cameravision.cameravision
-import cameravision.coordframes
-import cameravision.distortion
-import cameravision.validity
-from cameravision.maps_impl import (LensType, apply_distortion_map_inplace, apply_end_inplace,
+import lensform.core
+import lensform.coordframes
+import lensform.distortion
+import lensform.validity
+from lensform.maps_impl import (LensType, apply_distortion_map_inplace, apply_end_inplace,
                                  apply_fisheye_map_inplace, apply_middle_inplace, get_lens_type,
                                  precomp_map_distort_fisheye_cached,
                                  precomp_map_undistort_fisheye_cached,
@@ -29,7 +29,7 @@ def make(p, old_camera, new_camera, precomp):
     # USUAL
     if old_lens == LensType.USUAL and new_lens == LensType.NONE:
         old_d = old_camera.get_distortion_coeffs(12)
-        polar_ud_old = cameravision.validity.get_valid_distortion_region_cached(old_d.tobytes())
+        polar_ud_old = lensform.validity.get_valid_distortion_region_cached(old_d.tobytes())
         return make_old_distorted(
             p,
             old_camera.intrinsic_matrix,
@@ -54,7 +54,7 @@ def make(p, old_camera, new_camera, precomp):
                 new_camera.intrinsic_matrix,
             )
         else:
-            polar_ud_new = cameravision.validity.get_valid_distortion_region_cached(new_d.tobytes())
+            polar_ud_new = lensform.validity.get_valid_distortion_region_cached(new_d.tobytes())
             return make_new_distorted(
                 p,
                 old_camera.intrinsic_matrix,
@@ -67,7 +67,7 @@ def make(p, old_camera, new_camera, precomp):
 
     if old_lens == LensType.USUAL and new_lens == LensType.USUAL:
         old_d = old_camera.get_distortion_coeffs(12)
-        polar_ud_old = cameravision.validity.get_valid_distortion_region_cached(old_d.tobytes())
+        polar_ud_old = lensform.validity.get_valid_distortion_region_cached(old_d.tobytes())
         new_d = new_camera.get_distortion_coeffs(12)
         if precomp:
             undist_maps, undist_f = precomp_maps_undistort_cached(new_d)
@@ -83,7 +83,7 @@ def make(p, old_camera, new_camera, precomp):
                 new_camera.intrinsic_matrix,
             )
         else:
-            polar_ud_new = cameravision.validity.get_valid_distortion_region_cached(new_d.tobytes())
+            polar_ud_new = lensform.validity.get_valid_distortion_region_cached(new_d.tobytes())
             return make_both_distorted(
                 p,
                 old_camera.intrinsic_matrix,
@@ -110,7 +110,7 @@ def make(p, old_camera, new_camera, precomp):
                 new_camera.intrinsic_matrix,
             )
         else:
-            rud_old = cameravision.validity.fisheye_valid_r_max_cached(old_camera.distortion_coeffs)
+            rud_old = lensform.validity.fisheye_valid_r_max_cached(old_camera.distortion_coeffs)
             return make_old_fisheye(
                 p,
                 old_camera.intrinsic_matrix,
@@ -136,7 +136,7 @@ def make(p, old_camera, new_camera, precomp):
                 new_camera.intrinsic_matrix,
             )
         else:
-            rud_new = cameravision.validity.fisheye_valid_r_max_cached(new_camera.distortion_coeffs)
+            rud_new = lensform.validity.fisheye_valid_r_max_cached(new_camera.distortion_coeffs)
             return make_new_fisheye(
                 p,
                 old_camera.intrinsic_matrix,
@@ -165,8 +165,8 @@ def make(p, old_camera, new_camera, precomp):
                 new_camera.intrinsic_matrix,
             )
         else:
-            rud_old = cameravision.validity.fisheye_valid_r_max_cached(old_camera.distortion_coeffs)
-            rud_new = cameravision.validity.fisheye_valid_r_max_cached(new_camera.distortion_coeffs)
+            rud_old = lensform.validity.fisheye_valid_r_max_cached(old_camera.distortion_coeffs)
+            rud_new = lensform.validity.fisheye_valid_r_max_cached(new_camera.distortion_coeffs)
             return make_both_fisheye(
                 p,
                 old_camera.intrinsic_matrix,
@@ -182,7 +182,7 @@ def make(p, old_camera, new_camera, precomp):
     # MIX
     if old_lens == LensType.USUAL and new_lens == LensType.FISH:
         old_d = old_camera.get_distortion_coeffs(12)
-        polar_ud_old = cameravision.validity.get_valid_distortion_region_cached(old_d.tobytes())
+        polar_ud_old = lensform.validity.get_valid_distortion_region_cached(old_d.tobytes())
         if precomp:
             undist_map, rud_new = precomp_map_undistort_fisheye_cached(
                 new_camera.distortion_coeffs
@@ -199,7 +199,7 @@ def make(p, old_camera, new_camera, precomp):
                 new_camera.intrinsic_matrix,
             )
         else:
-            rud_new = cameravision.validity.fisheye_valid_r_max_cached(new_camera.distortion_coeffs)
+            rud_new = lensform.validity.fisheye_valid_r_max_cached(new_camera.distortion_coeffs)
             return make_old_usual_new_fisheye(
                 p,
                 old_camera.intrinsic_matrix,
@@ -229,8 +229,8 @@ def make(p, old_camera, new_camera, precomp):
                 new_camera.intrinsic_matrix,
             )
         else:
-            rud_old = cameravision.validity.fisheye_valid_r_max_cached(old_camera.distortion_coeffs)
-            polar_ud_new = cameravision.validity.get_valid_distortion_region_cached(new_d.tobytes())
+            rud_old = lensform.validity.fisheye_valid_r_max_cached(old_camera.distortion_coeffs)
+            polar_ud_new = lensform.validity.get_valid_distortion_region_cached(new_d.tobytes())
             return make_old_fisheye_new_usual(
                 p,
                 old_camera.intrinsic_matrix,
@@ -249,14 +249,14 @@ def make_no_distortion(p, K_old, R_old, R_new, K_new):
     if np.array_equal(R_old, R_new):
         return make_change_intrinsics(p, K_old, K_new)
     else:
-        H = cameravision.coordframes.mul_K_M_Kinv(K_old, R_old @ R_new.T, K_new)
-        return cameravision.coordframes.transform_perspective(p, H, dst=None)
+        H = lensform.coordframes.mul_K_M_Kinv(K_old, R_old @ R_new.T, K_new)
+        return lensform.coordframes.transform_perspective(p, H, dst=None)
 
 
 @numba.njit(error_model='numpy', cache=False)
 def make_old_distorted(p, K_old, d_old, polar_ud_old, R_old, R_new, K_new):
     pun_old = make_start(p, R_old, R_new, K_new)
-    pn_old = cameravision.distortion._distort_points(
+    pn_old = lensform.distortion._distort_points(
         pun_old, d_old, polar_ud_old, check_validity=True, clip_to_valid=False, dst=pun_old
     )
     p_old = make_intrinsics(pn_old, K_old)
@@ -266,7 +266,7 @@ def make_old_distorted(p, K_old, d_old, polar_ud_old, R_old, R_new, K_new):
 @numba.njit(error_model='numpy', cache=True)
 def make_old_fisheye(p, K_old, d_old, rud_old, R_old, R_new, K_new):
     pun_old = make_start(p, R_old, R_new, K_new)
-    pn_old = cameravision.distortion._distort_points_fisheye(
+    pn_old = lensform.distortion._distort_points_fisheye(
         pun_old, d_old, rud_old, check_validity=True, clip_to_valid=False, dst=pun_old
     )
     p_old = make_intrinsics(pn_old, K_old)
@@ -276,7 +276,7 @@ def make_old_fisheye(p, K_old, d_old, rud_old, R_old, R_new, K_new):
 @numba.njit(error_model='numpy', cache=True)
 def make_new_distorted(p, K_old, R_old, R_new, d_new, polar_ud_new, K_new):
     pn_new = make_undo_intrinsics(p, K_new)
-    pun_new = cameravision.distortion._undistort_points(
+    pun_new = lensform.distortion._undistort_points(
         pn_new,
         d_new,
         polar_ud_new,
@@ -297,7 +297,7 @@ def make_both_distorted(p, K_old, d_old, polar_ud_old, R_old, R_new, d_new, pola
         return make_change_intrinsics(p, K_old, K_new)
 
     pn_new = make_undo_intrinsics(p, K_new)
-    pun_new = cameravision.distortion._undistort_points(
+    pun_new = lensform.distortion._undistort_points(
         pn_new,
         d_new,
         polar_ud_new,
@@ -309,7 +309,7 @@ def make_both_distorted(p, K_old, d_old, polar_ud_old, R_old, R_new, d_new, pola
         lambda_=5e-1,
     )
     pun_old = apply_middle_inplace(pun_new, R_old, R_new)
-    pn_old = cameravision.distortion._distort_points(
+    pn_old = lensform.distortion._distort_points(
         pun_old, d_old, polar_ud_old, check_validity=True, clip_to_valid=False, dst=pun_old
     )
     p_old = make_intrinsics(pn_old, K_old)
@@ -319,7 +319,7 @@ def make_both_distorted(p, K_old, d_old, polar_ud_old, R_old, R_new, d_new, pola
 @numba.njit(error_model='numpy', cache=True)
 def make_new_fisheye(p, K_old, R_old, R_new, d_new, rud_new, K_new):
     pn_new = make_undo_intrinsics(p, K_new)
-    pun_new = cameravision.distortion._undistort_points_fisheye(
+    pun_new = lensform.distortion._undistort_points_fisheye(
         pn_new, d_new, rud_new, n_iter_newton=3, check_validity=True
     )
     p_old = apply_end_inplace(pun_new, K_old, R_old, R_new)
@@ -332,11 +332,11 @@ def make_both_fisheye(p, K_old, d_old, rud_old, R_old, R_new, d_new, rud_new, K_
         return make_change_intrinsics(p, K_old, K_new)
 
     pn_new = make_undo_intrinsics(p, K_new)
-    pun_new = cameravision.distortion._undistort_points_fisheye(
+    pun_new = lensform.distortion._undistort_points_fisheye(
         pn_new, d_new, rud_new, n_iter_newton=3, check_validity=True
     )
     pun_old = apply_middle_inplace(pun_new, R_old, R_new)
-    pn_old = cameravision.distortion._distort_points_fisheye(
+    pn_old = lensform.distortion._distort_points_fisheye(
         pun_old, d_old, rud_old, check_validity=True, clip_to_valid=False, dst=pun_old
     )
     p_old = make_intrinsics(pn_old, K_old)
@@ -347,11 +347,11 @@ def make_both_fisheye(p, K_old, d_old, rud_old, R_old, R_new, d_new, rud_new, K_
 @numba.njit(error_model='numpy', cache=True)
 def make_old_usual_new_fisheye(p, K_old, d_old, polar_ud_old, R_old, R_new, d_new, rud_new, K_new):
     pn_new = make_undo_intrinsics(p, K_new)
-    pun_new = cameravision.distortion._undistort_points_fisheye(
+    pun_new = lensform.distortion._undistort_points_fisheye(
         pn_new, d_new, rud_new, n_iter_newton=3, check_validity=True
     )
     pun_old = apply_middle_inplace(pun_new, R_old, R_new)
-    pn_old = cameravision.distortion._distort_points(
+    pn_old = lensform.distortion._distort_points(
         pun_old, d_old, polar_ud_old, check_validity=True, clip_to_valid=False, dst=pun_old
     )
     p_old = make_intrinsics(pn_old, K_old)
@@ -361,7 +361,7 @@ def make_old_usual_new_fisheye(p, K_old, d_old, polar_ud_old, R_old, R_new, d_ne
 @numba.njit(error_model='numpy', cache=True)
 def make_old_fisheye_new_usual(p, K_old, d_old, rud_old, R_old, R_new, d_new, polar_ud_new, K_new):
     pn_new = make_undo_intrinsics(p, K_new)
-    pun_new = cameravision.distortion._undistort_points(
+    pun_new = lensform.distortion._undistort_points(
         pn_new,
         d_new,
         polar_ud_new,
@@ -373,7 +373,7 @@ def make_old_fisheye_new_usual(p, K_old, d_old, rud_old, R_old, R_new, d_new, po
         lambda_=5e-1,
     )
     pun_old = apply_middle_inplace(pun_new, R_old, R_new)
-    pn_old = cameravision.distortion._distort_points_fisheye(
+    pn_old = lensform.distortion._distort_points_fisheye(
         pun_old, d_old, rud_old, check_validity=True, clip_to_valid=False, dst=pun_old
     )
     p_old = make_intrinsics(pn_old, K_old)
@@ -385,24 +385,24 @@ def make_start(p, R_old, R_new, K_new):
     if np.array_equal(R_old, R_new):
         return make_undo_intrinsics(p, K_new)
     else:
-        H = cameravision.coordframes.mul_M_K_inv(R_old @ R_new.T, K_new).astype(np.float32)
-        return cameravision.coordframes.transform_perspective(p, H, dst=None).astype(np.float32)
+        H = lensform.coordframes.mul_M_K_inv(R_old @ R_new.T, K_new).astype(np.float32)
+        return lensform.coordframes.transform_perspective(p, H, dst=None).astype(np.float32)
 
 
 @numba.njit(error_model='numpy', cache=True)
 def make_intrinsics(p, K):
-    return cameravision.coordframes.apply_intrinsics(p, K, dst=None).astype(np.float32)
+    return lensform.coordframes.apply_intrinsics(p, K, dst=None).astype(np.float32)
 
 
 @numba.njit(error_model='numpy', cache=True)
 def make_undo_intrinsics(p, K):
-    return cameravision.coordframes.undo_intrinsics(p, K, dst=None).astype(np.float32)
+    return lensform.coordframes.undo_intrinsics(p, K, dst=None).astype(np.float32)
 
 
 @numba.njit(error_model='numpy', cache=True)
 def make_change_intrinsics(p, K_do, K_undo):
-    L = cameravision.coordframes.relative_intrinsics(K_undo, K_do)
-    return cameravision.coordframes.apply_intrinsics(p, L, dst=None).astype(np.float32)
+    L = lensform.coordframes.relative_intrinsics(K_undo, K_do)
+    return lensform.coordframes.apply_intrinsics(p, L, dst=None).astype(np.float32)
 
 
 @numba.njit(error_model='numpy', cache=True, parallel=False)
@@ -420,7 +420,7 @@ def make_both_distorted_from_precomp(
     pn_new = make_undo_intrinsics(p, K_new)
     pun_new = apply_distortion_map_inplace(pn_new, undist_maps, undist_f)
     pun_old = apply_middle_inplace(pun_new, R_old, R_new)
-    pn_old = cameravision.distortion._distort_points(
+    pn_old = lensform.distortion._distort_points(
         pun_old, d_old, polar_ud_old, check_validity=True, clip_to_valid=False, dst=pun_old
     )
     p_old = make_intrinsics(pn_old, K_old)
@@ -467,7 +467,7 @@ def make_old_usual_new_fisheye_from_precomp(
     ru_new, rd_new = rud_new
     pun_new = apply_fisheye_map_inplace(pn_new, undist_map, rd_new)
     pun_old = apply_middle_inplace(pun_new, R_old, R_new)
-    pn_old = cameravision.distortion._distort_points(
+    pn_old = lensform.distortion._distort_points(
         pun_old, d_old, polar_ud_old, check_validity=True, clip_to_valid=False, dst=pun_old
     )
     p_old = make_intrinsics(pn_old, K_old)
@@ -477,7 +477,7 @@ def make_old_usual_new_fisheye_from_precomp(
 @numba.njit(error_model='numpy', cache=True)
 def make_old_fisheye_new_usual(p, K_old, d_old, rud_old, R_old, R_new, d_new, polar_ud_new, K_new):
     pn_new = make_undo_intrinsics(p, K_new)
-    pun_new = cameravision.distortion._undistort_points(
+    pun_new = lensform.distortion._undistort_points(
         pn_new,
         d_new,
         polar_ud_new,
@@ -489,7 +489,7 @@ def make_old_fisheye_new_usual(p, K_old, d_old, rud_old, R_old, R_new, d_new, po
         lambda_=5e-1,
     )
     pun_old = apply_middle_inplace(pun_new, R_old, R_new)
-    pn_old = cameravision.distortion._distort_points_fisheye(
+    pn_old = lensform.distortion._distort_points_fisheye(
         pun_old, d_old, rud_old, check_validity=True, clip_to_valid=False, dst=pun_old
     )
     p_old = make_intrinsics(pn_old, K_old)

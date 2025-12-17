@@ -1,11 +1,11 @@
 import functools
 from typing import TYPE_CHECKING
 
-import cameravision.cameravision
-import cameravision.coordframes
-import cameravision.distortion
-import cameravision.reprojection
-import cameravision.util
+import lensform.core
+import lensform.coordframes
+import lensform.distortion
+import lensform.reprojection
+import lensform.util
 import cv2
 import numba
 import numpy as np
@@ -15,7 +15,7 @@ from rlemasklib import RLEMask
 from shapely.geometry import GeometryCollection, MultiPolygon, Polygon
 
 if TYPE_CHECKING:
-    from cameravision import Camera
+    from lensform import Camera
 
 
 # =============================================================================
@@ -195,7 +195,7 @@ def shape_undistorted_to_image(camera, shape):
 
 def shape_apply_intrinsics(camera, shape):
     K = camera.intrinsic_matrix
-    return shape_transform(lambda x: cameravision.coordframes.apply_intrinsics(x, K, dst=x), shape)
+    return shape_transform(lambda x: lensform.coordframes.apply_intrinsics(x, K, dst=x), shape)
 
 
 @numba.njit(error_model='numpy', cache=True)
@@ -232,7 +232,7 @@ def _get_valid_distortion_region_polar(
 
     # Convert boundary to distorted space
     pu = polar_to_cartesian(radii_dense, theta_dense)
-    pn = cameravision.distortion._distort_points(
+    pn = lensform.distortion._distort_points(
         pu, d, polar_ud_valid=None, check_validity=False, clip_to_valid=False, dst=pu
     )
     radii_dense_distorted, theta_dense_distorted = cartesian_to_polar(pn)
@@ -540,7 +540,7 @@ def get_valid_poly(camera: "Camera", imshape=None):
 
     elif camera.has_nonfisheye_distortion():
         pun_valid = get_valid_distortion_region(camera, cartesian=True) * np.float32(0.99)
-        pn_valid = cameravision.distortion._distort_points(
+        pn_valid = lensform.distortion._distort_points(
             pun_valid,
             camera.get_distortion_coeffs(12),
             polar_ud_valid=None,
@@ -548,7 +548,7 @@ def get_valid_poly(camera: "Camera", imshape=None):
             clip_to_valid=False,
             dst=pun_valid,
         )
-        p_valid = cameravision.coordframes.apply_intrinsics(
+        p_valid = lensform.coordframes.apply_intrinsics(
             pn_valid, camera.intrinsic_matrix, dst=pn_valid
         )
 
@@ -576,7 +576,7 @@ def get_valid_poly_reproj(old_camera, new_camera, imshape_old=None, imshape_new=
     near_z = np.float32(1e-3)
     far_z = np.float32(1e6)
 
-    if np.allclose(new_camera.R, old_camera.R) and cameravision.util.allclose_or_nones(
+    if np.allclose(new_camera.R, old_camera.R) and lensform.util.allclose_or_nones(
         new_camera.distortion_coeffs, old_camera.distortion_coeffs
     ):
         return get_valid_poly_reproj_affine(old_camera, new_camera, imshape_old, imshape_new)
@@ -659,7 +659,7 @@ def get_valid_poly_reproj_affine(old_camera, new_camera, imshape_old=None, imsha
             s_new_of_new = s_new_of_new_box & shapely.make_valid(s_new_of_new)
 
         s_new_of_old = shape_transform(
-            lambda x: cameravision.coordframes.reproject_intrinsics(
+            lambda x: lensform.coordframes.reproject_intrinsics(
                 x, old_camera.intrinsic_matrix, new_camera.intrinsic_matrix
             ),
             s_old_of_old,
@@ -669,7 +669,7 @@ def get_valid_poly_reproj_affine(old_camera, new_camera, imshape_old=None, imsha
         if imshape_old is not None:
             s_old_of_old = shapely.box(0, 0, imshape_old[1], imshape_old[0])
             s_new_of_old = shape_transform(
-                lambda x: cameravision.coordframes.reproject_intrinsics(
+                lambda x: lensform.coordframes.reproject_intrinsics(
                     x, old_camera.intrinsic_matrix, new_camera.intrinsic_matrix
                 ),
                 s_old_of_old,
@@ -892,7 +892,7 @@ def get_optimal_undistorted_intrinsics(
     new_camera.intrinsic_matrix[0, 1] = 0
 
     # Get valid region polygon and its bounding box (outer_box)
-    valid_poly: shapely.Polygon = cameravision.validity.get_valid_poly_reproj(
+    valid_poly: shapely.Polygon = lensform.validity.get_valid_poly_reproj(
         old_camera, new_camera, old_imshape, imshape_new=None
     )
     x1, y1, x2, y2 = valid_poly.bounds

@@ -13,13 +13,13 @@ Main features:
 ## Installation
 
 ```bash
-pip install cameravision
+pip install lensform
 ```
 
 It is recommended to then run the Numba precompilation step (takes around 1–2 minutes). This will make image warping and coordinate transformations fast already on first use.
 
 ```bash
-python -m cameravision.precompile
+python -m lensform.precompile
 ```
 
 ## Documentation

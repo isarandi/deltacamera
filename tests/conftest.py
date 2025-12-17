@@ -1,10 +1,10 @@
-"""Shared fixtures and helpers for cameravision tests."""
+"""Shared fixtures and helpers for lensform tests."""
 
 import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
 
-import cameravision
+import lensform
 
 
 # =============================================================================
@@ -126,7 +126,7 @@ def make_camera_with_distortion(distortion_coeffs, intrinsic=None):
     """Create a camera with specified distortion coefficients."""
     if intrinsic is None:
         intrinsic = [[500, 0, 320], [0, 500, 240], [0, 0, 1]]
-    return cameravision.Camera(
+    return lensform.Camera(
         intrinsic_matrix=intrinsic,
         distortion_coeffs=distortion_coeffs,
     )
@@ -139,7 +139,7 @@ def make_camera_with_distortion(distortion_coeffs, intrinsic=None):
 @pytest.fixture
 def simple_camera():
     """A simple pinhole camera with no distortion."""
-    return cameravision.Camera(
+    return lensform.Camera(
         intrinsic_matrix=[[500, 0, 320], [0, 500, 240], [0, 0, 1]],
     )
 
@@ -147,7 +147,7 @@ def simple_camera():
 @pytest.fixture
 def distorted_camera():
     """A camera with Brown-Conrady distortion."""
-    return cameravision.Camera(
+    return lensform.Camera(
         intrinsic_matrix=[[500, 0, 320], [0, 500, 240], [0, 0, 1]],
         distortion_coeffs=BROWN_CONRADY_5_COEFFS[0],
     )
@@ -156,7 +156,7 @@ def distorted_camera():
 @pytest.fixture
 def fisheye_camera():
     """A camera with fisheye distortion."""
-    return cameravision.Camera(
+    return lensform.Camera(
         intrinsic_matrix=[[300, 0, 320], [0, 300, 240], [0, 0, 1]],
         distortion_coeffs=FISHEYE_COEFFS[0],
     )
@@ -165,7 +165,7 @@ def fisheye_camera():
 @pytest.fixture
 def positioned_camera():
     """A camera with position and rotation."""
-    return cameravision.Camera(
+    return lensform.Camera(
         optical_center=[1, 2, 3],
         rot_world_to_cam=random_rotation_matrix(),
         intrinsic_matrix=[[500, 0, 320], [0, 500, 240], [0, 0, 1]],

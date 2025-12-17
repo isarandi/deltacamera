@@ -3,9 +3,9 @@
 import numpy as np
 import pytest
 
-import cameravision
-import cameravision.distortion
-import cameravision.validity
+import lensform
+import lensform.distortion
+import lensform.validity
 from conftest import (
     BROWN_CONRADY_COEFFS,
     BROWN_CONRADY_5_COEFFS,
@@ -28,7 +28,7 @@ class TestBrownConradyRoundtrip:
         """Roundtrip with 12-parameter model."""
         camera = make_camera_with_distortion(d)
         # get_valid_distortion_region returns (undistorted_region, distorted_region)
-        valid_region_ud, _ = cameravision.validity.get_valid_distortion_region(
+        valid_region_ud, _ = lensform.validity.get_valid_distortion_region(
             camera, cartesian=True, n_vertices=128
         )
 
@@ -42,10 +42,10 @@ class TestBrownConradyRoundtrip:
         else:
             points = sample_inside_polygon(valid_region_ud, n=500, margin=0.1)
 
-        distorted = cameravision.distortion.distort_points(
+        distorted = lensform.distortion.distort_points(
             points, d, check_validity=False
         )
-        recovered = cameravision.distortion.undistort_points(
+        recovered = lensform.distortion.undistort_points(
             distorted, d, check_validity=False
         )
 
@@ -58,7 +58,7 @@ class TestBrownConradyRoundtrip:
         camera = make_camera_with_distortion(d12)
 
         # get_valid_distortion_region returns (undistorted_region, distorted_region)
-        valid_region_ud, _ = cameravision.validity.get_valid_distortion_region(
+        valid_region_ud, _ = lensform.validity.get_valid_distortion_region(
             camera, cartesian=True, n_vertices=128
         )
 
@@ -70,10 +70,10 @@ class TestBrownConradyRoundtrip:
         else:
             points = sample_inside_polygon(valid_region_ud, n=500, margin=0.1)
 
-        distorted = cameravision.distortion.distort_points(
+        distorted = lensform.distortion.distort_points(
             points, d12, check_validity=False
         )
-        recovered = cameravision.distortion.undistort_points(
+        recovered = lensform.distortion.undistort_points(
             distorted, d12, check_validity=False
         )
 
@@ -84,12 +84,12 @@ class TestBrownConradyRoundtrip:
         d = BROWN_CONRADY_COEFFS[0]
         origin = np.array([[0, 0]], np.float32)
 
-        distorted = cameravision.distortion.distort_points(
+        distorted = lensform.distortion.distort_points(
             origin, d, check_validity=False
         )
         np.testing.assert_allclose(distorted, origin, atol=1e-10)
 
-        recovered = cameravision.distortion.undistort_points(
+        recovered = lensform.distortion.undistort_points(
             distorted, d, check_validity=False
         )
         np.testing.assert_allclose(recovered, origin, atol=1e-10)
@@ -99,7 +99,7 @@ class TestBrownConradyRoundtrip:
         d = BROWN_CONRADY_COEFFS[0]
         small_points = np.random.randn(100, 2).astype(np.float32) * 0.01
 
-        distorted = cameravision.distortion.distort_points(
+        distorted = lensform.distortion.distort_points(
             small_points, d, check_validity=False
         )
         # Small points should barely move
@@ -116,7 +116,7 @@ class TestFisheyeRoundtrip:
     @pytest.mark.parametrize("d", FISHEYE_COEFFS)
     def test_roundtrip(self, d):
         """Basic roundtrip test."""
-        ru_valid, _ = cameravision.validity.fisheye_valid_r_max(d)
+        ru_valid, _ = lensform.validity.fisheye_valid_r_max(d)
 
         # Handle infinite valid radius (well-behaved distortion)
         ru_max = ru_valid if np.isfinite(ru_valid) else 5.0
@@ -126,10 +126,10 @@ class TestFisheyeRoundtrip:
         theta = np.random.uniform(-np.pi, np.pi, 500).astype(np.float32)
         points = np.stack([r * np.cos(theta), r * np.sin(theta)], axis=1)
 
-        distorted = cameravision.distortion.distort_points_fisheye(
+        distorted = lensform.distortion.distort_points_fisheye(
             points, d, check_validity=False
         )
-        recovered = cameravision.distortion.undistort_points_fisheye(
+        recovered = lensform.distortion.undistort_points_fisheye(
             distorted, d, check_validity=False
         )
 
@@ -142,7 +142,7 @@ class TestFisheyeRoundtrip:
         d = FISHEYE_COEFFS[0]
         origin = np.array([[0, 0]], np.float32)
 
-        distorted = cameravision.distortion.distort_points_fisheye(
+        distorted = lensform.distortion.distort_points_fisheye(
             origin, d, check_validity=False
         )
         np.testing.assert_allclose(distorted, origin, atol=1e-10)
@@ -160,12 +160,12 @@ class TestDistortionValidityChecking:
         d = BROWN_CONRADY_COEFFS[0]
         camera = make_camera_with_distortion(d)
         # get_valid_distortion_region returns (undistorted_region, distorted_region)
-        valid_region_ud, _ = cameravision.validity.get_valid_distortion_region(
+        valid_region_ud, _ = lensform.validity.get_valid_distortion_region(
             camera, cartesian=True, n_vertices=128
         )
         points = sample_inside_polygon(valid_region_ud, n=200, margin=0.15)
 
-        result = cameravision.distortion.distort_points(
+        result = lensform.distortion.distort_points(
             points, d, check_validity=True
         )
 
@@ -176,14 +176,14 @@ class TestDistortionValidityChecking:
         d = BROWN_CONRADY_COEFFS[0]
         camera = make_camera_with_distortion(d)
         # get_valid_distortion_region returns (undistorted_region, distorted_region)
-        valid_region_ud, _ = cameravision.validity.get_valid_distortion_region(
+        valid_region_ud, _ = lensform.validity.get_valid_distortion_region(
             camera, cartesian=True, n_vertices=128
         )
 
         # Scale points to be outside valid region
         outside_points = valid_region_ud[::4] * 1.5  # Subsample and scale
 
-        result = cameravision.distortion.distort_points(
+        result = lensform.distortion.distort_points(
             outside_points, d, check_validity=True
         )
 
@@ -205,7 +205,7 @@ class TestZeroDistortion:
         d = np.zeros(12, np.float32)
         points = np.random.randn(100, 2).astype(np.float32)
 
-        distorted = cameravision.distortion.distort_points(
+        distorted = lensform.distortion.distort_points(
             points, d, check_validity=False
         )
 
@@ -216,10 +216,10 @@ class TestZeroDistortion:
         d = np.zeros(4, np.float32)
         points = np.random.randn(100, 2).astype(np.float32) * 0.5
 
-        distorted = cameravision.distortion.distort_points_fisheye(
+        distorted = lensform.distortion.distort_points_fisheye(
             points, d, check_validity=False
         )
-        recovered = cameravision.distortion.undistort_points_fisheye(
+        recovered = lensform.distortion.undistort_points_fisheye(
             distorted, d, check_validity=False
         )
 
@@ -238,7 +238,7 @@ class TestDistortionEdgeCases:
         d = BROWN_CONRADY_COEFFS[0]
         empty = np.zeros((0, 2), np.float32)
 
-        result = cameravision.distortion.distort_points(empty, d, check_validity=False)
+        result = lensform.distortion.distort_points(empty, d, check_validity=False)
         assert result.shape == (0, 2)
 
     def test_single_point(self):
@@ -246,10 +246,10 @@ class TestDistortionEdgeCases:
         d = BROWN_CONRADY_COEFFS[0]
         point = np.array([[0.1, 0.1]], np.float32)
 
-        distorted = cameravision.distortion.distort_points(
+        distorted = lensform.distortion.distort_points(
             point, d, check_validity=False
         )
-        recovered = cameravision.distortion.undistort_points(
+        recovered = lensform.distortion.undistort_points(
             distorted, d, check_validity=False
         )
 
@@ -265,7 +265,7 @@ class TestDistortionEdgeCases:
             [0.0, -0.3],
         ], np.float32)
 
-        distorted = cameravision.distortion.distort_points(
+        distorted = lensform.distortion.distort_points(
             points, d, check_validity=False
         )
 

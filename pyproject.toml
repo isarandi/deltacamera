@@ -3,7 +3,7 @@ requires = ["setuptools>=64", "wheel", "setuptools_scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cameravision"
+name = "lensform"
 dynamic = ["version"]
 description = "Manipulate camera calibration parameters and warp images for computer vision tasks."
 authors = [
@@ -71,27 +71,30 @@ docs = [
     "toml",
 ]
 dev = [
-    "cameravision[test,lint,docs]",
+    "lensform[test,lint,docs]",
 ]
 
 [project.urls]
-Homepage = "https://github.com/isarandi/cameravision"
-Repository = "https://github.com/isarandi/cameravision"
-Documentation = "https://cameravision.readthedocs.io/"
-Issues = "https://github.com/isarandi/cameravision/issues"
-Changelog = "https://github.com/isarandi/cameravision/releases"
+Homepage = "https://github.com/isarandi/lensform"
+Repository = "https://github.com/isarandi/lensform"
+Documentation = "https://lensform.readthedocs.io/"
+Issues = "https://github.com/isarandi/lensform/issues"
+Changelog = "https://github.com/isarandi/lensform/releases"
 Author = "https://istvansarandi.com"
 
 [tool.setuptools_scm]
 version_scheme = "guess-next-dev"
 local_scheme = "no-local-version"
-version_file = "src/cameravision/_version.py"
+version_file = "src/lensform/_version.py"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+lensform = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
