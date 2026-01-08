@@ -8,6 +8,7 @@ Documentation
 
    explanation/reprojection
    explanation/distortion-validity
+   explanation/sympy-codegen
 
 .. toctree::
    :maxdepth: 3

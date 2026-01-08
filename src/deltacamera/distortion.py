@@ -1,9 +1,9 @@
 import numba
 import numpy as np
 
-import lensform.reprojection
-import lensform.core
-import lensform.validity
+import deltacamera.reprojection
+import deltacamera.core
+import deltacamera.validity
 
 
 def distort_points(pu, d, check_validity=True, clip_to_valid=False, dst=None):
@@ -11,7 +11,7 @@ def distort_points(pu, d, check_validity=True, clip_to_valid=False, dst=None):
         raise ValueError("Only one of check_validity and clip_to_valid can be True")
 
     if check_validity or clip_to_valid:
-        polar_ud_valid = lensform.validity.get_valid_distortion_region_cached(
+        polar_ud_valid = deltacamera.validity.get_valid_distortion_region_cached(
             d.astype(np.float32).tobytes()
         )
     else:
@@ -30,7 +30,7 @@ def undistort_points(pn, d, check_validity=True, clip_to_valid=False):
     if check_validity and clip_to_valid:
         raise ValueError("Only one of check_validity and clip_to_valid can be True")
 
-    polar_ud = lensform.validity.get_valid_distortion_region_cached(
+    polar_ud = deltacamera.validity.get_valid_distortion_region_cached(
         d.astype(np.float32).tobytes()
     )
     return _undistort_points(
@@ -338,14 +338,14 @@ def distort_points_fisheye(pu, d, check_validity=True, clip_to_valid=False, dst=
     if check_validity and clip_to_valid:
         raise ValueError("Only one of check_validity and clip_to_valid can be True")
 
-    rud = lensform.validity.fisheye_valid_r_max_cached(d)
+    rud = deltacamera.validity.fisheye_valid_r_max_cached(d)
     return _distort_points_fisheye(
         pu, d, rud_valid=rud, check_validity=check_validity, clip_to_valid=clip_to_valid, dst=dst
     )
 
 
 def undistort_points_fisheye(pn, d, check_validity=True):
-    rud = lensform.validity.fisheye_valid_r_max_cached(d)
+    rud = deltacamera.validity.fisheye_valid_r_max_cached(d)
     return _undistort_points_fisheye(pn, d, rud, n_iter_newton=3, check_validity=check_validity)
 
 

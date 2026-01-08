@@ -4,9 +4,9 @@ import numpy as np
 import pytest
 import shapely
 
-import lensform
-import lensform.validity
-import lensform.distortion
+import deltacamera
+import deltacamera.validity
+import deltacamera.distortion
 from conftest import (
     BROWN_CONRADY_COEFFS,
     FISHEYE_COEFFS,
@@ -28,7 +28,7 @@ class TestValidRegionPolygon:
         """Valid region polygon should be closed (first == last vertex)."""
         camera = make_camera_with_distortion(d)
         # get_valid_distortion_region returns (undistorted_region, distorted_region)
-        region, _ = lensform.validity.get_valid_distortion_region(
+        region, _ = deltacamera.validity.get_valid_distortion_region(
             camera, cartesian=True, n_vertices=128
         )
         np.testing.assert_allclose(region[0], region[-1], atol=1e-6)
@@ -38,7 +38,7 @@ class TestValidRegionPolygon:
         """Valid region polygon should not self-intersect."""
         camera = make_camera_with_distortion(d)
         # get_valid_distortion_region returns (undistorted_region, distorted_region)
-        region, _ = lensform.validity.get_valid_distortion_region(
+        region, _ = deltacamera.validity.get_valid_distortion_region(
             camera, cartesian=True, n_vertices=128
         )
         poly = shapely.Polygon(region)
@@ -49,7 +49,7 @@ class TestValidRegionPolygon:
         """Valid region should contain the origin."""
         camera = make_camera_with_distortion(d)
         # get_valid_distortion_region returns (undistorted_region, distorted_region)
-        region, _ = lensform.validity.get_valid_distortion_region(
+        region, _ = deltacamera.validity.get_valid_distortion_region(
             camera, cartesian=True, n_vertices=128
         )
         poly = shapely.Polygon(region)
@@ -60,7 +60,7 @@ class TestValidRegionPolygon:
         """Valid region should have positive area."""
         camera = make_camera_with_distortion(d)
         # get_valid_distortion_region returns (undistorted_region, distorted_region)
-        region, _ = lensform.validity.get_valid_distortion_region(
+        region, _ = deltacamera.validity.get_valid_distortion_region(
             camera, cartesian=True, n_vertices=128
         )
         poly = shapely.Polygon(region)
@@ -84,7 +84,7 @@ class TestJacobianAtBoundary:
         """
         camera = make_camera_with_distortion(d)
         # get_valid_distortion_region returns (undistorted_region, distorted_region)
-        region, _ = lensform.validity.get_valid_distortion_region(
+        region, _ = deltacamera.validity.get_valid_distortion_region(
             camera, cartesian=True, n_vertices=128
         )
 
@@ -94,7 +94,7 @@ class TestJacobianAtBoundary:
         t = np.arctan2(boundary_points[:, 1], boundary_points[:, 0]).astype(np.float32)
 
         # Compute Jacobian determinant in polar coords
-        det = lensform.validity.jacobian_det_polar(r, t, d)
+        det = deltacamera.validity.jacobian_det_polar(r, t, d)
 
         # Check if boundary is at the default r=5 limit (no Jacobian=0 crossing)
         if np.allclose(r, 5.0, atol=0.1):
@@ -110,7 +110,7 @@ class TestJacobianAtBoundary:
         """Jacobian determinant should be positive inside the valid region."""
         camera = make_camera_with_distortion(d)
         # get_valid_distortion_region returns (undistorted_region, distorted_region)
-        region, _ = lensform.validity.get_valid_distortion_region(
+        region, _ = deltacamera.validity.get_valid_distortion_region(
             camera, cartesian=True, n_vertices=128
         )
 
@@ -118,7 +118,7 @@ class TestJacobianAtBoundary:
         r = np.linalg.norm(inside_points, axis=1).astype(np.float32)
         t = np.arctan2(inside_points[:, 1], inside_points[:, 0]).astype(np.float32)
 
-        det = lensform.validity.jacobian_det_polar(r, t, d)
+        det = deltacamera.validity.jacobian_det_polar(r, t, d)
         assert np.all(det > 0), f"Found {np.sum(det <= 0)} points with det <= 0"
 
     @pytest.mark.parametrize("d", BROWN_CONRADY_COEFFS)
@@ -126,7 +126,7 @@ class TestJacobianAtBoundary:
         """Jacobian determinant at origin should be 1."""
         r = np.array([0.0], np.float32)
         t = np.array([0.0], np.float32)
-        det = lensform.validity.jacobian_det_polar(r, t, d)
+        det = deltacamera.validity.jacobian_det_polar(r, t, d)
         np.testing.assert_allclose(det, 1.0, rtol=1e-6)
 
 
@@ -142,12 +142,12 @@ class TestValidRegionConsistency:
         """Distortion should succeed for points inside valid region."""
         camera = make_camera_with_distortion(d)
         # get_valid_distortion_region returns (undistorted_region, distorted_region)
-        region, _ = lensform.validity.get_valid_distortion_region(
+        region, _ = deltacamera.validity.get_valid_distortion_region(
             camera, cartesian=True, n_vertices=128
         )
         inside_points = sample_inside_polygon(region, n=200, margin=0.15)
 
-        result = lensform.distortion.distort_points(
+        result = deltacamera.distortion.distort_points(
             inside_points, d, check_validity=True
         )
 
@@ -159,7 +159,7 @@ class TestValidRegionConsistency:
         """Roundtrip should succeed for points inside valid region."""
         camera = make_camera_with_distortion(d)
         # get_valid_distortion_region returns (undistorted_region, distorted_region)
-        region, _ = lensform.validity.get_valid_distortion_region(
+        region, _ = deltacamera.validity.get_valid_distortion_region(
             camera, cartesian=True, n_vertices=128
         )
 
@@ -171,10 +171,10 @@ class TestValidRegionConsistency:
         else:
             inside_points = sample_inside_polygon(region, n=200, margin=0.15)
 
-        distorted = lensform.distortion.distort_points(
+        distorted = deltacamera.distortion.distort_points(
             inside_points, d, check_validity=False
         )
-        recovered = lensform.distortion.undistort_points(
+        recovered = deltacamera.distortion.undistort_points(
             distorted, d, check_validity=False
         )
 
@@ -191,7 +191,7 @@ class TestFisheyeValidRegion:
     @pytest.mark.parametrize("d", FISHEYE_COEFFS)
     def test_fisheye_valid_radius_positive(self, d):
         """Fisheye valid radius should be positive."""
-        ru_valid, rd_valid = lensform.validity.fisheye_valid_r_max(d)
+        ru_valid, rd_valid = deltacamera.validity.fisheye_valid_r_max(d)
 
         # ru_valid can be inf for well-behaved distortions
         assert ru_valid > 0
@@ -200,7 +200,7 @@ class TestFisheyeValidRegion:
     @pytest.mark.parametrize("d", FISHEYE_COEFFS)
     def test_fisheye_distortion_inside_valid(self, d):
         """Distortion should succeed inside fisheye valid region."""
-        ru_valid, _ = lensform.validity.fisheye_valid_r_max(d)
+        ru_valid, _ = deltacamera.validity.fisheye_valid_r_max(d)
 
         # Handle infinite valid radius
         ru_max = ru_valid if np.isfinite(ru_valid) else 5.0
@@ -209,7 +209,7 @@ class TestFisheyeValidRegion:
         theta = np.random.uniform(-np.pi, np.pi, 100).astype(np.float32)
         points = np.stack([r * np.cos(theta), r * np.sin(theta)], axis=1)
 
-        result = lensform.distortion.distort_points_fisheye(
+        result = deltacamera.distortion.distort_points_fisheye(
             points, d, check_validity=True
         )
 
@@ -228,10 +228,10 @@ class TestPolarCartesianConsistency:
         """Polar and cartesian representations should be consistent."""
         camera = make_camera_with_distortion(d)
         # get_valid_distortion_region returns (undistorted_region, distorted_region)
-        polar, _ = lensform.validity.get_valid_distortion_region(
+        polar, _ = deltacamera.validity.get_valid_distortion_region(
             camera, cartesian=False, n_vertices=128
         )
-        cartesian, _ = lensform.validity.get_valid_distortion_region(
+        cartesian, _ = deltacamera.validity.get_valid_distortion_region(
             camera, cartesian=True, n_vertices=128
         )
 
@@ -256,8 +256,8 @@ class TestValidRegionCaching:
         d = BROWN_CONRADY_COEFFS[0]
         key = d.astype(np.float32).tobytes()
 
-        result1 = lensform.validity.get_valid_distortion_region_cached(key)
-        result2 = lensform.validity.get_valid_distortion_region_cached(key)
+        result1 = deltacamera.validity.get_valid_distortion_region_cached(key)
+        result2 = deltacamera.validity.get_valid_distortion_region_cached(key)
 
         np.testing.assert_array_equal(result1[0], result2[0])
         np.testing.assert_array_equal(result1[1], result2[1])
@@ -272,12 +272,12 @@ class TestReprojectionValidRegion:
 
     def test_same_camera_full_image(self):
         """Reprojecting to same camera should give full image as valid."""
-        camera = lensform.Camera(
+        camera = deltacamera.Camera(
             intrinsic_matrix=[[500, 0, 320], [0, 500, 240], [0, 0, 1]],
         )
         imshape = (480, 640)
 
-        poly = lensform.validity.get_valid_poly_reproj(
+        poly = deltacamera.validity.get_valid_poly_reproj(
             camera, camera, imshape, imshape
         )
 
@@ -286,7 +286,7 @@ class TestReprojectionValidRegion:
 
     def test_rotation_reduces_valid_area(self):
         """Rotating camera should reduce valid overlap area."""
-        camera1 = lensform.Camera(
+        camera1 = deltacamera.Camera(
             intrinsic_matrix=[[500, 0, 320], [0, 500, 240], [0, 0, 1]],
         )
         camera2 = camera1.copy()
@@ -294,7 +294,7 @@ class TestReprojectionValidRegion:
 
         imshape = (480, 640)
 
-        poly = lensform.validity.get_valid_poly_reproj(
+        poly = deltacamera.validity.get_valid_poly_reproj(
             camera1, camera2, imshape, imshape
         )
 

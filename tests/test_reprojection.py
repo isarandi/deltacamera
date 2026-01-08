@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-import lensform
-import lensform.reprojection
+import deltacamera
+import deltacamera.reprojection
 from conftest import random_rotation_matrix, small_rotation_matrix
 
 
@@ -15,7 +15,7 @@ class TestPointReprojection:
         """Reprojecting to same camera should be identity."""
         points = np.random.rand(50, 2).astype(np.float32) * [640, 480]
 
-        reprojected = lensform.reprojection.reproject_image_points(
+        reprojected = deltacamera.reprojection.reproject_image_points(
             points, simple_camera, simple_camera
         )
 
@@ -23,23 +23,23 @@ class TestPointReprojection:
 
     def test_only_intrinsics_change(self):
         """Changing only intrinsics should be a linear transform."""
-        camera1 = lensform.Camera(
+        camera1 = deltacamera.Camera(
             intrinsic_matrix=[[500, 0, 320], [0, 500, 240], [0, 0, 1]],
         )
-        camera2 = lensform.Camera(
+        camera2 = deltacamera.Camera(
             intrinsic_matrix=[[600, 0, 400], [0, 600, 300], [0, 0, 1]],
         )
 
         # Principal point
         pp1 = np.array([[320, 240]], np.float32)
-        reprojected = lensform.reprojection.reproject_image_points(pp1, camera1, camera2)
+        reprojected = deltacamera.reprojection.reproject_image_points(pp1, camera1, camera2)
 
         # Principal point of camera1 (optical axis) should map to pp of camera2
         np.testing.assert_allclose(reprojected, [[400, 300]], rtol=1e-5)
 
     def test_rotation_moves_points(self):
         """Rotation should move off-center points."""
-        camera1 = lensform.Camera(
+        camera1 = deltacamera.Camera(
             intrinsic_matrix=[[500, 0, 320], [0, 500, 240], [0, 0, 1]],
         )
         camera2 = camera1.copy()
@@ -47,17 +47,17 @@ class TestPointReprojection:
 
         # Point away from center
         point = np.array([[400, 300]], np.float32)
-        reprojected = lensform.reprojection.reproject_image_points(point, camera1, camera2)
+        reprojected = deltacamera.reprojection.reproject_image_points(point, camera1, camera2)
 
         # Should have moved
         assert not np.allclose(reprojected, point, atol=1)
 
     def test_reprojection_roundtrip(self):
         """Reprojecting A->B->A should recover original."""
-        camera1 = lensform.Camera(
+        camera1 = deltacamera.Camera(
             intrinsic_matrix=[[500, 0, 320], [0, 500, 240], [0, 0, 1]],
         )
-        camera2 = lensform.Camera(
+        camera2 = deltacamera.Camera(
             intrinsic_matrix=[[600, 0, 350], [0, 600, 280], [0, 0, 1]],
             rot_world_to_cam=small_rotation_matrix(5),
         )
@@ -68,8 +68,8 @@ class TestPointReprojection:
             [450, 350],
         ], np.float32)
 
-        intermediate = lensform.reprojection.reproject_image_points(points, camera1, camera2)
-        recovered = lensform.reprojection.reproject_image_points(intermediate, camera2, camera1)
+        intermediate = deltacamera.reprojection.reproject_image_points(points, camera1, camera2)
+        recovered = deltacamera.reprojection.reproject_image_points(intermediate, camera2, camera1)
 
         np.testing.assert_allclose(recovered, points, rtol=1e-4, atol=0.1)
 
@@ -81,7 +81,7 @@ class TestImageReprojection:
         """Reprojecting to same camera should preserve image."""
         image = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
 
-        reprojected = lensform.reprojection.reproject_image(
+        reprojected = deltacamera.reprojection.reproject_image(
             image, simple_camera, simple_camera, output_imshape=(480, 640),
             return_validity_mask=True
         )
@@ -103,7 +103,7 @@ class TestImageReprojection:
         camera2 = simple_camera.copy()
         camera2.intrinsic_matrix[0, 2] = 400  # Different principal point
 
-        reprojected = lensform.reprojection.reproject_image(
+        reprojected = deltacamera.reprojection.reproject_image(
             image, simple_camera, camera2, output_imshape=(600, 800)
         )
 
@@ -113,7 +113,7 @@ class TestImageReprojection:
         """Should handle grayscale images."""
         image = np.random.randint(0, 255, (480, 640), dtype=np.uint8)
 
-        reprojected = lensform.reprojection.reproject_image(
+        reprojected = deltacamera.reprojection.reproject_image(
             image, simple_camera, simple_camera, output_imshape=(480, 640)
         )
 
@@ -125,33 +125,33 @@ class TestReprojectionWithDistortion:
 
     def test_undistort_to_pinhole(self):
         """Reprojecting from distorted to undistorted camera."""
-        distorted = lensform.Camera(
+        distorted = deltacamera.Camera(
             intrinsic_matrix=[[500, 0, 320], [0, 500, 240], [0, 0, 1]],
             distortion_coeffs=[-0.2, 0.1, 0, 0, 0],
         )
-        pinhole = lensform.Camera(
+        pinhole = deltacamera.Camera(
             intrinsic_matrix=[[500, 0, 320], [0, 500, 240], [0, 0, 1]],
         )
 
         # Center point should be unchanged
         center = np.array([[320, 240]], np.float32)
-        reprojected = lensform.reprojection.reproject_image_points(center, distorted, pinhole)
+        reprojected = deltacamera.reprojection.reproject_image_points(center, distorted, pinhole)
 
         np.testing.assert_allclose(reprojected, center, atol=0.1)
 
     def test_distort_from_pinhole(self):
         """Reprojecting from pinhole to distorted camera."""
-        pinhole = lensform.Camera(
+        pinhole = deltacamera.Camera(
             intrinsic_matrix=[[500, 0, 320], [0, 500, 240], [0, 0, 1]],
         )
-        distorted = lensform.Camera(
+        distorted = deltacamera.Camera(
             intrinsic_matrix=[[500, 0, 320], [0, 500, 240], [0, 0, 1]],
             distortion_coeffs=[-0.2, 0.1, 0, 0, 0],
         )
 
         # Center point should be unchanged
         center = np.array([[320, 240]], np.float32)
-        reprojected = lensform.reprojection.reproject_image_points(center, pinhole, distorted)
+        reprojected = deltacamera.reprojection.reproject_image_points(center, pinhole, distorted)
 
         np.testing.assert_allclose(reprojected, center, atol=0.1)
 
@@ -163,7 +163,7 @@ class TestReprojectionEdgeCases:
         """Empty point arrays should not crash."""
         empty = np.zeros((0, 2), np.float32)
 
-        result = lensform.reprojection.reproject_image_points(
+        result = deltacamera.reprojection.reproject_image_points(
             empty, simple_camera, simple_camera
         )
 
@@ -173,7 +173,7 @@ class TestReprojectionEdgeCases:
         """Single point should work."""
         point = np.array([[320, 240]], np.float32)
 
-        result = lensform.reprojection.reproject_image_points(
+        result = deltacamera.reprojection.reproject_image_points(
             point, simple_camera, simple_camera
         )
 

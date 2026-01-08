@@ -3,7 +3,7 @@ requires = ["setuptools>=64", "wheel", "setuptools_scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "lensform"
+name = "deltacamera"
 dynamic = ["version"]
 description = "Manipulate camera calibration parameters and warp images for computer vision tasks."
 authors = [
@@ -70,31 +70,31 @@ docs = [
     "setuptools-scm",
     "toml",
 ]
+gui = [
+    "PyQt6>=6.5.0",
+]
 dev = [
-    "lensform[test,lint,docs]",
+    "deltacamera[test,lint,docs]",
 ]
 
 [project.urls]
-Homepage = "https://github.com/isarandi/lensform"
-Repository = "https://github.com/isarandi/lensform"
-Documentation = "https://lensform.readthedocs.io/"
-Issues = "https://github.com/isarandi/lensform/issues"
-Changelog = "https://github.com/isarandi/lensform/releases"
+Homepage = "https://github.com/isarandi/deltacamera"
+Repository = "https://github.com/isarandi/deltacamera"
+Documentation = "https://deltacamera.readthedocs.io/"
+Issues = "https://github.com/isarandi/deltacamera/issues"
+Changelog = "https://github.com/isarandi/deltacamera/releases"
 Author = "https://istvansarandi.com"
 
 [tool.setuptools_scm]
 version_scheme = "guess-next-dev"
 local_scheme = "no-local-version"
-version_file = "src/lensform/_version.py"
+version_file = "src/deltacamera/_version.py"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[tool.setuptools.package-data]
-lensform = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

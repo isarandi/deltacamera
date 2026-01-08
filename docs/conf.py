@@ -1,4 +1,4 @@
-"""Sphinx configuration for lensform documentation."""
+"""Sphinx configuration for deltacamera documentation."""
 
 import importlib
 import os

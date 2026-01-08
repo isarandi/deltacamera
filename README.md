@@ -1,4 +1,4 @@
-# CameraVision
+# Deltacamera
 
 Represent, manipulate and use camera calibration info in computer vision tasks.
 
@@ -13,13 +13,13 @@ Main features:
 ## Installation
 
 ```bash
-pip install lensform
+pip install deltacamera
 ```
 
 It is recommended to then run the Numba precompilation step (takes around 1–2 minutes). This will make image warping and coordinate transformations fast already on first use.
 
 ```bash
-python -m lensform.precompile
+python -m deltacamera.precompile
 ```
 
 ## Documentation

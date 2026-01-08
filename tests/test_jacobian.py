@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-import lensform.validity
-import lensform.distortion
+import deltacamera.validity
+import deltacamera.distortion
 from conftest import BROWN_CONRADY_COEFFS, extend_distortion_coeffs
 
 
@@ -28,7 +28,7 @@ class TestJacobianNumerical:
         t = np.arctan2(points[:, 1], points[:, 0]).astype(np.float32)
 
         # Analytical Jacobian determinant (in polar coordinates)
-        analytical_det = lensform.validity.jacobian_det_polar(r, t, d)
+        analytical_det = deltacamera.validity.jacobian_det_polar(r, t, d)
 
         # Numerical Jacobian via finite differences (in Cartesian)
         eps = 1e-5
@@ -36,16 +36,16 @@ class TestJacobianNumerical:
 
         for i, p in enumerate(points):
             # Compute partial derivatives numerically
-            p_xp = lensform.distortion.distort_points(
+            p_xp = deltacamera.distortion.distort_points(
                 p.reshape(1, 2) + [[eps, 0]], d, check_validity=False
             )[0]
-            p_xm = lensform.distortion.distort_points(
+            p_xm = deltacamera.distortion.distort_points(
                 p.reshape(1, 2) - [[eps, 0]], d, check_validity=False
             )[0]
-            p_yp = lensform.distortion.distort_points(
+            p_yp = deltacamera.distortion.distort_points(
                 p.reshape(1, 2) + [[0, eps]], d, check_validity=False
             )[0]
-            p_ym = lensform.distortion.distort_points(
+            p_ym = deltacamera.distortion.distort_points(
                 p.reshape(1, 2) - [[0, eps]], d, check_validity=False
             )[0]
 
@@ -63,7 +63,7 @@ class TestJacobianNumerical:
         for d in BROWN_CONRADY_COEFFS:
             r = np.array([0.0], np.float32)
             t = np.array([0.0], np.float32)
-            det = lensform.validity.jacobian_det_polar(r, t, d)
+            det = deltacamera.validity.jacobian_det_polar(r, t, d)
             np.testing.assert_allclose(det, 1.0, rtol=1e-6)
 
     def test_jacobian_symmetry(self):
@@ -76,7 +76,7 @@ class TestJacobianNumerical:
         angles = np.linspace(0, 2 * np.pi, 8, endpoint=False).astype(np.float32)
         r = np.full_like(angles, radius)
 
-        det = lensform.validity.jacobian_det_polar(r, angles, d)
+        det = deltacamera.validity.jacobian_det_polar(r, angles, d)
 
         # All should have same determinant
         np.testing.assert_allclose(det, det[0], rtol=1e-5)

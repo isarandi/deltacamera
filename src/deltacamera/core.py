@@ -5,13 +5,13 @@ import numpy as np
 import shapely
 from scipy.spatial.transform import Rotation
 
-import lensform.coordframes
-import lensform.distortion
-from lensform.decorators import camera_transform, point_transform
-from lensform.util import allclose_or_nones, equal_or_nones, unit_vec
+import deltacamera.coordframes
+import deltacamera.distortion
+from deltacamera.decorators import camera_transform, point_transform
+from deltacamera.util import allclose_or_nones, equal_or_nones, unit_vec
 
 if TYPE_CHECKING:
-    from lensform import Camera
+    from deltacamera import Camera
 
 
 class Camera:
@@ -121,30 +121,30 @@ class Camera:
 
         if not self.has_distortion():
             if points.shape[1] == 3:
-                return lensform.coordframes.project_and_apply_intrinsics(
+                return deltacamera.coordframes.project_and_apply_intrinsics(
                     points, self.intrinsic_matrix, dst=dst
                 )
             else:
-                return lensform.coordframes.apply_intrinsics(
+                return deltacamera.coordframes.apply_intrinsics(
                     points, self.intrinsic_matrix, dst=dst
                 )
 
         if points.shape[1] == 3:
-            pun = lensform.coordframes.project(points, dst=dst)
+            pun = deltacamera.coordframes.project(points, dst=dst)
             pn_dst = pun
         else:
             pun = points
             pn_dst = dst
 
         if self.has_fisheye_distortion():
-            pn = lensform.distortion.distort_points_fisheye(
+            pn = deltacamera.distortion.distort_points_fisheye(
                 pun, self.distortion_coeffs, check_validity=validate_distortion, dst=pn_dst
             )
         else:
-            pn = lensform.distortion.distort_points(
+            pn = deltacamera.distortion.distort_points(
                 pun, self.get_distortion_coeffs(12), check_validity=validate_distortion, dst=pn_dst
             )
-        return lensform.coordframes.apply_intrinsics(pn, self.intrinsic_matrix, dst=pn)
+        return deltacamera.coordframes.apply_intrinsics(pn, self.intrinsic_matrix, dst=pn)
 
     @point_transform
     def world_to_camera(self, points: np.ndarray) -> np.ndarray:
@@ -156,7 +156,7 @@ class Camera:
         Returns:
             points in camera coordinates
         """
-        return lensform.coordframes.world_to_camera(points, self.R, self.t)
+        return deltacamera.coordframes.world_to_camera(points, self.R, self.t)
 
     @point_transform
     def camera_to_world(self, points: np.ndarray) -> np.ndarray:
@@ -168,7 +168,7 @@ class Camera:
         Returns:
             points in world coordinates
         """
-        return lensform.coordframes.camera_to_world(points, self.R, self.t, dst=None)
+        return deltacamera.coordframes.camera_to_world(points, self.R, self.t, dst=None)
 
     @point_transform
     def world_to_image(self, points: np.ndarray, validate_distortion: bool = True) -> np.ndarray:
@@ -181,20 +181,20 @@ class Camera:
             points in image coordinates
         """
         if not self.has_distortion():
-            return lensform.coordframes.world_to_image(
+            return deltacamera.coordframes.world_to_image(
                 points, self.intrinsic_matrix, self.R, self.t
             )
 
-        pun = lensform.coordframes.world_to_undist(points, self.R, self.t)
+        pun = deltacamera.coordframes.world_to_undist(points, self.R, self.t)
         if self.has_fisheye_distortion():
-            pn = lensform.distortion.distort_points_fisheye(
+            pn = deltacamera.distortion.distort_points_fisheye(
                 pun, self.distortion_coeffs, check_validity=validate_distortion, dst=pun
             )
         else:
-            pn = lensform.distortion.distort_points(
+            pn = deltacamera.distortion.distort_points(
                 pun, self.get_distortion_coeffs(12), check_validity=validate_distortion, dst=pun
             )
-        return lensform.coordframes.apply_intrinsics(pn, self.intrinsic_matrix, dst=pn)
+        return deltacamera.coordframes.apply_intrinsics(pn, self.intrinsic_matrix, dst=pn)
 
     @point_transform
     def image_to_camera(
@@ -215,28 +215,28 @@ class Camera:
         """
         if not self.has_distortion():
             if depth is None:
-                return lensform.coordframes.undo_intrinsics(
+                return deltacamera.coordframes.undo_intrinsics(
                     points, self.intrinsic_matrix, dst=dst
                 )
             elif np.isscalar(depth):
-                return lensform.coordframes.backproject_K_depthval(
+                return deltacamera.coordframes.backproject_K_depthval(
                     points, self.intrinsic_matrix, np.float32(depth), dst=dst
                 )
             else:
                 depth = depth.reshape(-1).astype(np.float32)
-                return lensform.coordframes.backproject_K_deptharr(
+                return deltacamera.coordframes.backproject_K_deptharr(
                     points, self.intrinsic_matrix, depth, dst=dst
                 )
 
-        pn = lensform.coordframes.undo_intrinsics(points, self.intrinsic_matrix, dst=None)
+        pn = deltacamera.coordframes.undo_intrinsics(points, self.intrinsic_matrix, dst=None)
         if self.has_fisheye_distortion():
-            pun = lensform.distortion.undistort_points_fisheye(
+            pun = deltacamera.distortion.undistort_points_fisheye(
                 pn,
                 self.distortion_coeffs,
                 check_validity=validate_distortion,
             )
         else:
-            pun = lensform.distortion.undistort_points(
+            pun = deltacamera.distortion.undistort_points(
                 pn,
                 self.get_distortion_coeffs(12),
                 check_validity=validate_distortion,
@@ -250,12 +250,12 @@ class Camera:
                 return pun
         elif np.isscalar(depth):
             if depth == 1.0:
-                return lensform.coordframes.backproject_homogeneous(pun, dst=dst)
+                return deltacamera.coordframes.backproject_homogeneous(pun, dst=dst)
             else:
-                return lensform.coordframes.backproject_depthval(pun, np.float32(depth), dst=dst)
+                return deltacamera.coordframes.backproject_depthval(pun, np.float32(depth), dst=dst)
         else:
             depth = depth.reshape(-1).astype(np.float32)
-            return lensform.coordframes.backproject_deptharr(pun, depth, dst=dst)
+            return deltacamera.coordframes.backproject_deptharr(pun, depth, dst=dst)
 
     @point_transform
     def image_to_world(
@@ -272,7 +272,7 @@ class Camera:
         """
 
         pcam = self.image_to_camera(points, camera_depth)
-        return lensform.coordframes.camera_to_world(pcam, self.R, self.t, dst=pcam)
+        return deltacamera.coordframes.camera_to_world(pcam, self.R, self.t, dst=pcam)
 
     @point_transform
     def is_visible(
@@ -300,9 +300,9 @@ class Camera:
         # if check_distortion and self.has_distortion():
         #     # Check if the point is within the distortion limits
         #     checker_func = (
-        #         lensform.validity.are_points_in_valid_region_fisheye
+        #         deltacamera.validity.are_points_in_valid_region_fisheye
         #         if self.has_fisheye_distortion()
-        #         else lensform.validity.are_points_in_valid_region
+        #         else deltacamera.validity.are_points_in_valid_region
         #     )
         #     is_valid[is_valid] = checker_func(
         #         from_homogeneous(cam_points[is_valid]), self.distortion_coeffs
@@ -525,7 +525,7 @@ class Camera:
             return cam, None, None
         else:
             cam.intrinsic_matrix, box, poly = (
-                lensform.validity.get_optimal_undistorted_intrinsics(
+                deltacamera.validity.get_optimal_undistorted_intrinsics(
                     cam,
                     imshape_distorted,
                     imshape_undistorted,
@@ -611,14 +611,14 @@ class Camera:
         coordinates in image space.
         This is only applicable if the camera has no distortion.
         """
-        return lensform.coordframes.get_projection_matrix3x4(
+        return deltacamera.coordframes.get_projection_matrix3x4(
             self.intrinsic_matrix, self.R, self.t
         )
 
     def get_extrinsic_matrix(self) -> np.ndarray:
         """Get the 4x4 extrinsic transformation matrix that maps 3D points in world space to
         3D points in camera space."""
-        return lensform.coordframes.get_extrinsic_matrix(self.R, self.t)
+        return deltacamera.coordframes.get_extrinsic_matrix(self.R, self.t)
 
     @property
     def extrinsic_matrix(self):
@@ -632,7 +632,7 @@ class Camera:
     def get_inv_extrinsic_matrix(self) -> np.ndarray:
         """Get the 4x4 extrinsic transformation matrix that maps 3D points in camera space to
         3D points in world space."""
-        return lensform.coordframes.get_inv_extrinsic_matrix(self.R, self.t)
+        return deltacamera.coordframes.get_inv_extrinsic_matrix(self.R, self.t)
 
     def get_fov(self, imshape) -> float:
         """Get the field of view of the camera in degrees.
@@ -803,7 +803,7 @@ def visible_subbox(old_camera, new_camera, old_imshape, new_box):
     Returns:
         The sub-box of `new_box` (x, y, w, h) as described.
     """
-    valid_poly = lensform.validity.get_valid_poly_reproj(
+    valid_poly = deltacamera.validity.get_valid_poly_reproj(
         old_camera, new_camera, old_imshape[:2], None
     )
     s_box = shapely.Polygon.from_bounds(*new_box[:2], *(new_box[:2] + new_box[2:]))

@@ -1,13 +1,13 @@
 import itertools
 
-import lensform
-import lensform.validity
+import deltacamera
+import deltacamera.validity
 import numpy as np
 
 
 def precompile():
-    print("Precompiling lensform Numba functions...")
-    camera_undist = lensform.Camera.from_fov(60, (100, 100))
+    print("Precompiling deltacamera Numba functions...")
+    camera_undist = deltacamera.Camera.from_fov(60, (100, 100))
     camera_dist = camera_undist.copy()
     camera_dist.distortion_coeffs = np.array(
         [-3.36591e-01, 1.59742e-01, 1.26970e-04, -7.22557e-05, -4.61953e-02], dtype=np.float32
@@ -23,16 +23,16 @@ def precompile():
     points = np.random.rand(10, 2).astype(np.float32) * 100
 
     for cam1, cam2 in itertools.permutations([camera_undist, camera_dist, camera_fish], 2):
-        lensform.reproject_image(
+        deltacamera.reproject_image(
             im, cam1, cam2, imshape, precomp_undist_maps=True, use_linear_srgb=False
         )
-        lensform.reproject_image(
+        deltacamera.reproject_image(
             im, cam1, cam2, imshape, precomp_undist_maps=False, use_linear_srgb=True
         )
-        lensform.reproject_image_points(points, cam1, cam2)
-        lensform.reproject_mask(im, cam1, cam2, imshape)
+        deltacamera.reproject_image_points(points, cam1, cam2)
+        deltacamera.reproject_mask(im, cam1, cam2, imshape)
         for imshape1, imshape2 in itertools.product([imshape, None], repeat=2):
-            lensform.validity.get_valid_poly_reproj(
+            deltacamera.validity.get_valid_poly_reproj(
                 cam1, cam2, imshape_old=imshape1, imshape_new=imshape2
             )
 

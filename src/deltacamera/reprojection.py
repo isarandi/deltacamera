@@ -7,15 +7,15 @@ import numba
 import numpy as np
 import rlemasklib
 
-import lensform.coordframes
-import lensform.distortion
-import lensform.maps
-import lensform.points_impl
-import lensform.util
-import lensform.validity
+import deltacamera.coordframes
+import deltacamera.distortion
+import deltacamera.maps
+import deltacamera.points_impl
+import deltacamera.util
+import deltacamera.validity
 
 if typing.TYPE_CHECKING:
-    from lensform import Camera
+    from deltacamera import Camera
 
 
 def reproject_image_points(
@@ -40,7 +40,7 @@ def reproject_image_points(
     # The argument order has to be new_camera, old_camera
     # it is because the point and the map implementation is kept analogous
     # but one goes from old to new, the other from new to old when warping
-    reproj_resh = lensform.points_impl.make(
+    reproj_resh = deltacamera.points_impl.make(
         points_resh, new_camera, old_camera, precomp_undist_maps
     )
     return reproj_resh.reshape(points.shape)
@@ -185,7 +185,7 @@ def reproject_image_aliased(
         remapped = reproject_image_fast(
             image, old_camera, new_camera, output_imshape, border_mode, border_value, interp, dst
         )
-        is_valid_rle = lensform.validity.get_valid_mask_reproj(
+        is_valid_rle = deltacamera.validity.get_valid_mask_reproj(
             old_camera, new_camera, imshape_old=image.shape[:2], imshape_new=output_imshape
         )
         mask_image_by_rle(remapped, ~is_valid_rle, border_value)
@@ -194,7 +194,7 @@ def reproject_image_aliased(
     if (
         not cache_maps
         and np.allclose(new_camera.R, old_camera.R)
-        and lensform.util.allclose_or_nones(
+        and deltacamera.util.allclose_or_nones(
             new_camera.distortion_coeffs, old_camera.distortion_coeffs
         )
     ):
@@ -202,13 +202,13 @@ def reproject_image_aliased(
         remapped = reproject_image_affine(
             image, old_camera, new_camera, output_imshape, border_mode, border_value, interp, dst
         )
-        is_valid_rle = lensform.validity.get_valid_mask_reproj(
+        is_valid_rle = deltacamera.validity.get_valid_mask_reproj(
             old_camera, new_camera, imshape_old=image.shape[:2], imshape_new=output_imshape
         )
         mask_image_by_rle(remapped, ~is_valid_rle, border_value)
         return remapped, is_valid_rle
 
-    maps, is_valid_rle = lensform.maps.get_maps_and_mask(
+    maps, is_valid_rle = deltacamera.maps.get_maps_and_mask(
         old_camera,
         new_camera,
         image.shape[:2],
@@ -319,7 +319,7 @@ def reproject_image_fast(
     dst=None,
 ):
     """Like reproject_image, but assumes there are no lens distortions."""
-    homography = lensform.coordframes.mul_K_M_Kinv(
+    homography = deltacamera.coordframes.mul_K_M_Kinv(
         old_camera.intrinsic_matrix, old_camera.R @ new_camera.R.T, new_camera.intrinsic_matrix
     )
 
@@ -353,7 +353,7 @@ def reproject_image_affine(
 ):
     K_new = new_camera.intrinsic_matrix
     K_old = old_camera.intrinsic_matrix
-    affine_mat_2x3 = lensform.coordframes.relative_intrinsics(K_new, K_old)[:2]
+    affine_mat_2x3 = deltacamera.coordframes.relative_intrinsics(K_new, K_old)[:2]
     remapped = cv2.warpAffine(
         image,
         affine_mat_2x3,
@@ -380,6 +380,23 @@ def reproject_mask(
     dst=None,
     return_validity_mask=False,
 ):
+    """Reproject a binary mask from one camera view to another.
+
+    Args:
+        mask: Binary mask array (bool or uint8) in the old camera's image space.
+        old_camera: Source camera.
+        new_camera: Target camera.
+        dst_shape: Output shape (height, width).
+        border_mode: OpenCV border mode for out-of-bounds pixels.
+        border_value: Value for border pixels.
+        interp: Interpolation method.
+        antialias_factor: Antialiasing factor (1 = no antialiasing).
+        dst: Optional pre-allocated output array.
+        return_validity_mask: If True, also return a mask of valid pixels.
+
+    Returns:
+        Reprojected mask, or tuple of (mask, validity_mask) if return_validity_mask=True.
+    """
     input_bool = mask.dtype == bool
     if input_bool:
         mask = mask.view(np.uint8)
@@ -442,6 +459,22 @@ def reproject_rle_mask(
     precomp_undist_maps=True,
     warp_in_rle=False,
 ):
+    """Reproject an RLE-encoded mask from one camera view to another.
+
+    Args:
+        rle_mask: RLE-encoded binary mask in the old camera's image space.
+        old_camera: Source camera.
+        new_camera: Target camera.
+        dst_shape: Output shape (height, width).
+        interp: Interpolation method.
+        antialias_factor: Antialiasing factor (1 = no antialiasing).
+        dst: Optional pre-allocated output array.
+        precomp_undist_maps: Whether to precompute undistortion maps.
+        warp_in_rle: If True, warp directly in RLE space without decoding (experimental).
+
+    Returns:
+        Reprojected RLE mask.
+    """
     if (
         warp_in_rle
         and not old_camera.has_fisheye_distortion()
@@ -470,13 +503,13 @@ def reproject_rle_mask(
 
 
 def _reproject_rle_mask_in_rle(rle_mask, old_camera, new_camera, dst_shape):
-    valid_rle = lensform.validity.get_valid_mask_reproj(
+    valid_rle = deltacamera.validity.get_valid_mask_reproj(
         new_camera, old_camera, None, rle_mask.shape
     )
     rle_masked_to_valid = rle_mask & valid_rle
 
     if not old_camera.has_distortion() and not new_camera.has_distortion():
-        homography = lensform.coordframes.mul_K_M_Kinv(
+        homography = deltacamera.coordframes.mul_K_M_Kinv(
             new_camera.intrinsic_matrix,
             new_camera.R @ old_camera.R.T,
             old_camera.intrinsic_matrix,
@@ -488,14 +521,14 @@ def _reproject_rle_mask_in_rle(rle_mask, old_camera, new_camera, dst_shape):
 
     if np.allclose(new_camera.R, old_camera.R) and np.allclose(old_d, new_d):
         return rle_masked_to_valid.warp_affine(
-            lensform.coordframes.relative_intrinsics(
+            deltacamera.coordframes.relative_intrinsics(
                 new_camera.intrinsic_matrix, old_camera.intrinsic_matrix
             ),
             dst_shape,
         )
 
-    polar_ud1 = lensform.validity.get_valid_distortion_region_cached(old_d.tobytes())
-    polar_ud2 = lensform.validity.get_valid_distortion_region_cached(new_d.tobytes())
+    polar_ud1 = deltacamera.validity.get_valid_distortion_region_cached(old_d.tobytes())
+    polar_ud2 = deltacamera.validity.get_valid_distortion_region_cached(new_d.tobytes())
     return rle_masked_to_valid.warp_distorted(
         old_camera.R,
         new_camera.R,

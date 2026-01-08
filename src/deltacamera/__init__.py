@@ -4,7 +4,7 @@ This library provides coordinate transformations between world, camera, and imag
 with support for Brown-Conrady and Kannala-Brandt (fisheye) lens distortion models.
 
 Example:
-    >>> from lensform import Camera
+    >>> from deltacamera import Camera
     >>> cam = Camera(intrinsic_matrix=[[500, 0, 320], [0, 500, 240], [0, 0, 1]])
     >>> cam.world_to_image([[1, 2, 3]])
 """
@@ -18,6 +18,7 @@ __all__ = [
     # Core
     "Camera",
     "intrinsics_from_fov",
+    "estimate_fov_from_vanishing_points",
     "visible_subbox",
     # Reprojection
     "reproject_box",
@@ -36,13 +37,15 @@ __all__ = [
     "get_valid_mask_reproj",
 ]
 
-from lensform.core import (
+from deltacamera.core import (
     Camera,
     intrinsics_from_fov,
     visible_subbox,
 )
 
-from lensform.reprojection import (
+from deltacamera.vanishing_point_gui import estimate_fov_from_vanishing_points
+
+from deltacamera.reprojection import (
     decode_srgb,
     encode_srgb,
     reproject_box,
@@ -56,17 +59,17 @@ from lensform.reprojection import (
     reproject_rle_mask,
 )
 
-from lensform.validity import (
+from deltacamera.validity import (
     get_valid_mask,
     get_valid_mask_reproj,
 )
 
 # Set the __module__ attribute of all exported functions/classes to this module.
 # This is necessary for sphinx-codeautolink to correctly resolve references like
-# `Camera` to `lensform.Camera` in code blocks. Without this, sphinx-codeautolink
-# cannot link names that are imported (e.g., `from lensform import Camera`) because
-# it doesn't know that `Camera` refers to `lensform.Camera` rather than
-# `lensform.core.Camera`. The _module_original_ attribute preserves the true module
+# `Camera` to `deltacamera.Camera` in code blocks. Without this, sphinx-codeautolink
+# cannot link names that are imported (e.g., `from deltacamera import Camera`) because
+# it doesn't know that `Camera` refers to `deltacamera.Camera` rather than
+# `deltacamera.core.Camera`. The _module_original_ attribute preserves the true module
 # for use by docs/conf.py's `module_restored` context manager when resolving source links.
 for _x in __all__:
     _obj = globals().get(_x)
