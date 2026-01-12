@@ -73,6 +73,9 @@ html_title = project
 html_theme = "pydata_sphinx_theme"
 html_theme_options = {
     "show_toc_level": 3,
+    "navbar_start": ["navbar-logo"],
+    "navbar_center": ["navbar-nav"],
+    "primary_sidebar_end": [],
     "icon_links": [
         {
             "name": "GitHub",
@@ -81,6 +84,7 @@ html_theme_options = {
             "type": "fontawesome",
         }
     ],
+    "navigation_with_keys": False,
 }
 html_static_path = ["_static"]
 html_css_files = ["styles/my_theme.css"]
