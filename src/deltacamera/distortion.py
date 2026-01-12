@@ -1,19 +1,28 @@
 import numba
 import numpy as np
 
-import deltacamera.reprojection
-import deltacamera.core
-import deltacamera.validity
+from . import validity
+
+
+def get_distortion_coeffs(d, n=12):
+    """Pad distortion coefficients to n elements if shorter, convert to float32."""
+    d = np.asarray(d, dtype=np.float32)
+    if len(d) >= n:
+        return d
+    d_padded = np.zeros(n, dtype=np.float32)
+    d_padded[:len(d)] = d
+    return d_padded
 
 
 def distort_points(pu, d, check_validity=True, clip_to_valid=False, dst=None):
     if check_validity and clip_to_valid:
         raise ValueError("Only one of check_validity and clip_to_valid can be True")
 
+    pu = np.asarray(pu, dtype=np.float32)
+    d = get_distortion_coeffs(d, n=12)
+
     if check_validity or clip_to_valid:
-        polar_ud_valid = deltacamera.validity.get_valid_distortion_region_cached(
-            d.astype(np.float32).tobytes()
-        )
+        polar_ud_valid = validity.get_valid_distortion_region_cached(d.tobytes())
     else:
         polar_ud_valid = None
     return _distort_points(
@@ -30,9 +39,10 @@ def undistort_points(pn, d, check_validity=True, clip_to_valid=False):
     if check_validity and clip_to_valid:
         raise ValueError("Only one of check_validity and clip_to_valid can be True")
 
-    polar_ud = deltacamera.validity.get_valid_distortion_region_cached(
-        d.astype(np.float32).tobytes()
-    )
+    pn = np.asarray(pn, dtype=np.float32)
+    d = get_distortion_coeffs(d, n=12)
+
+    polar_ud = validity.get_valid_distortion_region_cached(d.tobytes())
     return _undistort_points(
         pn,
         d,
@@ -48,15 +58,36 @@ def undistort_points(pn, d, check_validity=True, clip_to_valid=False):
 
 @numba.njit(error_model='numpy', cache=True)
 def _distort_points(pun, d, polar_ud_valid, check_validity, clip_to_valid, dst):
+    """Apply Brown-Conrady distortion with optional tilt (14-param model).
+
+    Supports 12-param and 14-param distortion. When tilt params (d[12], d[13])
+    are zero or absent, falls back to pure 12-param computation.
+    """
     _1 = np.float32(1)
     _2 = np.float32(2)
     _nan = np.float32(np.nan)
 
-    k0, k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11 = d
+    k0, k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11 = d[:12]
     k2_p_k10 = k2 + k10
     k3_p_k8 = k3 + k8
     _2_k2 = _2 * k2
     _2_k3 = _2 * k3
+
+    # Check for tilt parameters
+    tau_x = d[12] if len(d) > 12 else np.float32(0)
+    tau_y = d[13] if len(d) > 13 else np.float32(0)
+    has_tilt = tau_x != 0.0 or tau_y != 0.0
+
+    # Precompute tilt rotation if needed
+    if has_tilt:
+        cx = np.cos(tau_x)
+        sx = np.sin(tau_x)
+        cy = np.cos(tau_y)
+        sy = np.sin(tau_y)
+        # R = Ry @ Rx rotation matrix elements
+        r00, r01, r02 = cy, sy * sx, sy * cx
+        r10, r11, r12 = np.float32(0), cx, -sx
+        r20, r21, r22 = -sy, cy * sx, cy * cx
 
     if dst is None:
         dst = np.empty_like(pun)
@@ -85,11 +116,19 @@ def _distort_points(pun, d, polar_ud_valid, check_validity, clip_to_valid, dst):
 
             a = (r2 * (k0 + r2 * (k1 + k4 * r2)) + _1) / (r2 * (k5 + r2 * (k6 + k7 * r2)) + _1)
             b = _2_k2 * puy + _2_k3 * pux
-            cx = r2 * (k3_p_k8 + k9 * r2)
-            cy = r2 * (k2_p_k10 + k11 * r2)
+            cx_dist = r2 * (k3_p_k8 + k9 * r2)
+            cy_dist = r2 * (k2_p_k10 + k11 * r2)
             s = a + b
-            dst[i, 0] = pux * s + cx
-            dst[i, 1] = puy * s + cy
+            x_d = pux * s + cx_dist
+            y_d = puy * s + cy_dist
+
+            if has_tilt:
+                w = r20 * x_d + r21 * y_d + r22
+                dst[i, 0] = (r00 * x_d + r01 * y_d + r02) / w
+                dst[i, 1] = (r10 * x_d + r11 * y_d + r12) / w
+            else:
+                dst[i, 0] = x_d
+                dst[i, 1] = y_d
     elif clip_to_valid and polar_ud_valid is not None:
         polar_u_valid, polar_d_valid = polar_ud_valid
         ru_valid, tu_valid = polar_u_valid
@@ -111,11 +150,19 @@ def _distort_points(pun, d, polar_ud_valid, check_validity, clip_to_valid, dst):
 
             a = (r2 * (k0 + r2 * (k1 + k4 * r2)) + _1) / (r2 * (k5 + r2 * (k6 + k7 * r2)) + _1)
             b = _2_k2 * puy + _2_k3 * pux
-            cx = r2 * (k3_p_k8 + k9 * r2)
-            cy = r2 * (k2_p_k10 + k11 * r2)
+            cx_dist = r2 * (k3_p_k8 + k9 * r2)
+            cy_dist = r2 * (k2_p_k10 + k11 * r2)
             s = a + b
-            dst[i, 0] = pux * s + cx
-            dst[i, 1] = puy * s + cy
+            x_d = pux * s + cx_dist
+            y_d = puy * s + cy_dist
+
+            if has_tilt:
+                w = r20 * x_d + r21 * y_d + r22
+                dst[i, 0] = (r00 * x_d + r01 * y_d + r02) / w
+                dst[i, 1] = (r10 * x_d + r11 * y_d + r12) / w
+            else:
+                dst[i, 0] = x_d
+                dst[i, 1] = y_d
     else:
         for i in range(pun.shape[0]):
             pux = pun[i, 0]
@@ -123,13 +170,138 @@ def _distort_points(pun, d, polar_ud_valid, check_validity, clip_to_valid, dst):
             r2 = pux * pux + puy * puy
             a = (r2 * (k0 + r2 * (k1 + k4 * r2)) + _1) / (r2 * (k5 + r2 * (k6 + k7 * r2)) + _1)
             b = _2_k2 * puy + _2_k3 * pux
-            cx = r2 * (k3_p_k8 + k9 * r2)
-            cy = r2 * (k2_p_k10 + k11 * r2)
+            cx_dist = r2 * (k3_p_k8 + k9 * r2)
+            cy_dist = r2 * (k2_p_k10 + k11 * r2)
             s = a + b
-            dst[i, 0] = pux * s + cx
-            dst[i, 1] = puy * s + cy
+            x_d = pux * s + cx_dist
+            y_d = puy * s + cy_dist
+
+            if has_tilt:
+                w = r20 * x_d + r21 * y_d + r22
+                dst[i, 0] = (r00 * x_d + r01 * y_d + r02) / w
+                dst[i, 1] = (r10 * x_d + r11 * y_d + r12) / w
+            else:
+                dst[i, 0] = x_d
+                dst[i, 1] = y_d
 
     return dst
+
+
+@numba.njit(error_model='numpy', cache=True)
+def _distort_points_with_jacobian(pun, d, dst, jac_dst):
+    """Apply Brown-Conrady distortion and compute Jacobian (14-param model).
+
+    This function does not perform validity checking. Use for precomputation
+    where points are known to be valid.
+
+    Args:
+        pun: Undistorted normalized points, shape (N, 2), float32
+        d: Distortion coefficients (14 elements), float32
+        dst: Output array for distorted points, shape (N, 2), or None to allocate
+        jac_dst: Output array for Jacobian, shape (N, 4) as [j00, j01, j10, j11], or None
+
+    Returns:
+        (dst, jac_dst) tuple
+    """
+    _0 = np.float32(0)
+    _1 = np.float32(1)
+    _2 = np.float32(2)
+
+    k0, k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11, tau_x, tau_y = d
+
+    if dst is None:
+        dst = np.empty_like(pun)
+    if jac_dst is None:
+        jac_dst = np.empty((pun.shape[0], 4), dtype=pun.dtype)
+
+    has_tilt = tau_x != _0 or tau_y != _0
+
+    if has_tilt:
+        cx = np.cos(tau_x)
+        sx = np.sin(tau_x)
+        cy = np.cos(tau_y)
+        sy = np.sin(tau_y)
+        r00, r01, r02 = cy, sy * sx, sy * cx
+        r10, r11, r12 = _0, cx, -sx
+        r20, r21, r22 = -sy, cy * sx, cy * cx
+
+    k2_p_k10 = k2 + k10
+    k3_p_k8 = k3 + k8
+    _2_k2 = _2 * k2
+    _2_k3 = _2 * k3
+
+    for i in range(pun.shape[0]):
+        pux = pun[i, 0]
+        puy = pun[i, 1]
+
+        r2 = pux * pux + puy * puy
+        _2_x = _2 * pux
+        _2_y = _2 * puy
+
+        # Compute 12-param distortion with Jacobian
+        k9_r2 = k9 * r2
+        k11_r2 = k11 * r2
+        k4_r2 = k4 * r2
+        k7_r2 = k7 * r2
+        x2 = k3_p_k8 + k9_r2
+        x16 = k2_p_k10 + k11_r2
+        x6 = k1 + k4_r2
+        x7 = k0 + r2 * x6
+        x10 = k6 + k7_r2
+        x11 = k5 + r2 * x10
+        x13 = _1 / (r2 * x11 + _1)
+        x29 = x13 * (r2 * x7 + _1)
+        x14 = pux * _2_k3 + puy * _2_k2 + x29
+        x26 = x13 * x13 * ((r2 * (k4_r2 + x6) + x7) - x29 * x29 * (r2 * (k7_r2 + x10) + x11))
+        x19 = pux * x26 + k3
+        x21 = puy * x26 + k2
+        x27 = k9_r2 + x2
+        x28 = k11_r2 + x16
+
+        x_d = pux * x14 + r2 * x2
+        y_d = puy * x14 + r2 * x16
+
+        # Jacobian of 12-param
+        j00_12 = _2_x * (x19 + x27) + x14
+        j11_12 = _2_y * (x21 + x28) + x14
+        j01_12 = _2_x * x21 + _2_y * x27
+        j10_12 = _2_y * x19 + _2_x * x28
+
+        if has_tilt:
+            # Apply tilt
+            w = r20 * x_d + r21 * y_d + r22
+            inv_w = _1 / w
+            x_out = (r00 * x_d + r01 * y_d + r02) * inv_w
+            y_out = (r10 * x_d + r11 * y_d + r12) * inv_w
+
+            # Jacobian of tilt w.r.t. (x_d, y_d)
+            jt00 = (r00 - x_out * r20) * inv_w
+            jt01 = (r01 - x_out * r21) * inv_w
+            jt10 = (r10 - y_out * r20) * inv_w
+            jt11 = (r11 - y_out * r21) * inv_w
+
+            # Chain rule: J_total = J_tilt @ J_12param
+            j00 = jt00 * j00_12 + jt01 * j10_12
+            j01 = jt00 * j01_12 + jt01 * j11_12
+            j10 = jt10 * j00_12 + jt11 * j10_12
+            j11 = jt10 * j01_12 + jt11 * j11_12
+
+            dst[i, 0] = x_out
+            dst[i, 1] = y_out
+        else:
+            dst[i, 0] = x_d
+            dst[i, 1] = y_d
+            j00 = j00_12
+            j01 = j01_12
+            j10 = j10_12
+            j11 = j11_12
+
+        jac_dst[i, 0] = j00
+        jac_dst[i, 1] = j01
+        jac_dst[i, 2] = j10
+        jac_dst[i, 3] = j11
+
+    return dst, jac_dst
 
 
 @numba.njit(error_model='numpy', cache=False)
@@ -144,7 +316,11 @@ def _undistort_points(
     n_iter_newton,
     lambda_,
 ):
-    k0, k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11 = d
+    """Remove Brown-Conrady distortion with optional tilt (14-param model).
+
+    For 14-param: first inverts the tilt transformation, then undistorts the 12-param.
+    """
+    k0, k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11 = d[:12]
     _1 = np.float32(1)
     _2 = np.float32(2)
     k3_p_k8 = k3 + k8
@@ -152,21 +328,49 @@ def _undistort_points(
     _2_k2 = _2 * k2
     _2_k3 = _2 * k3
 
+    # Check for tilt parameters
+    tau_x = d[12] if len(d) > 12 else np.float32(0)
+    tau_y = d[13] if len(d) > 13 else np.float32(0)
+    has_tilt = tau_x != 0.0 or tau_y != 0.0
+
+    # Precompute inverse tilt rotation if needed
+    # R_inv = Rx^T @ Ry^T where Rx^T and Ry^T are transposes
+    if has_tilt:
+        cx = np.cos(tau_x)
+        sx = np.sin(tau_x)
+        cy = np.cos(tau_y)
+        sy = np.sin(tau_y)
+        ri00, ri01, ri02 = cy, np.float32(0), -sy
+        ri10, ri11, ri12 = sx * sy, cx, sx * cy
+        ri20, ri21, ri22 = cx * sy, -sx, cx * cy
+
     (ru_valid, tu_valid), (rd_valid, td_valid) = polar_ud_valid
     ru2_valid_min = np.square(np.min(ru_valid))
 
     lambda_ = np.float32(lambda_)
 
-    pn_valid = pn
+    # If tilt present, first undo tilt to get 12-param distorted points
+    if has_tilt:
+        pn_untilted = np.empty_like(pn)
+        for i in range(pn.shape[0]):
+            pnx, pny = pn[i, 0], pn[i, 1]
+            w = ri20 * pnx + ri21 * pny + ri22
+            pn_untilted[i, 0] = (ri00 * pnx + ri01 * pny + ri02) / w
+            pn_untilted[i, 1] = (ri10 * pnx + ri11 * pny + ri12) / w
+        pn_for_undistort = pn_untilted
+    else:
+        pn_for_undistort = pn
+
+    pn_valid = pn_for_undistort
 
     if clip_to_valid:
-        pn_valid = np.empty_like(pn)
+        pn_valid = np.empty_like(pn_for_undistort)
         # in this case we do process the points that are outside the valid region
         # in this case we scale back the norm to the max valid radius
         # and then apply the distortion model
         rn2_valid_min = np.square(np.min(rd_valid))
-        for i in range(pn.shape[0]):
-            pnx, pny = pn[i, 0], pn[i, 1]
+        for i in range(pn_for_undistort.shape[0]):
+            pnx, pny = pn_for_undistort[i, 0], pn_for_undistort[i, 1]
             rn2 = pnx * pnx + pny * pny
             if rn2 > rn2_valid_min:
                 t = np.arctan2(pny, pnx)
@@ -188,10 +392,10 @@ def _undistort_points(
         # but will set nan to the output for them
         rn2_valid_max = np.square(np.max(rd_valid))
         rn2_valid_min = np.square(np.min(rd_valid))
-        i_valid = np.empty(pn.shape[0], dtype=np.int32)
+        i_valid = np.empty(pn_for_undistort.shape[0], dtype=np.int32)
         i_out = 0
-        for i in range(pn.shape[0]):
-            pnx, pny = pn[i, 0], pn[i, 1]
+        for i in range(pn_for_undistort.shape[0]):
+            pnx, pny = pn_for_undistort[i, 0], pn_for_undistort[i, 1]
             rn2 = pnx * pnx + pny * pny
             if rn2 > rn2_valid_max:
                 continue
@@ -203,12 +407,12 @@ def _undistort_points(
                     continue
             i_valid[i_out] = i
             i_out += 1
-        all_valid = i_out == pn.shape[0]
+        all_valid = i_out == pn_for_undistort.shape[0]
         if not all_valid:
             pn_valid = np.empty((i_out, 2), dtype=np.float32)
             for i in range(i_out):
-                pn_valid[i, 0] = pn[i_valid[i], 0]
-                pn_valid[i, 1] = pn[i_valid[i], 1]
+                pn_valid[i, 0] = pn_for_undistort[i_valid[i], 0]
+                pn_valid[i, 1] = pn_for_undistort[i_valid[i], 1]
             i_valid = i_valid[:i_out]
 
     pun_hat = np.empty_like(pn_valid)
@@ -338,63 +542,19 @@ def distort_points_fisheye(pu, d, check_validity=True, clip_to_valid=False, dst=
     if check_validity and clip_to_valid:
         raise ValueError("Only one of check_validity and clip_to_valid can be True")
 
-    rud = deltacamera.validity.fisheye_valid_r_max_cached(d)
+    pu = np.asarray(pu, dtype=np.float32)
+    d = np.asarray(d, dtype=np.float32)
+    rud = validity.fisheye_valid_r_max_cached(d)
     return _distort_points_fisheye(
         pu, d, rud_valid=rud, check_validity=check_validity, clip_to_valid=clip_to_valid, dst=dst
     )
 
 
 def undistort_points_fisheye(pn, d, check_validity=True):
-    rud = deltacamera.validity.fisheye_valid_r_max_cached(d)
+    pn = np.asarray(pn, dtype=np.float32)
+    d = np.asarray(d, dtype=np.float32)
+    rud = validity.fisheye_valid_r_max_cached(d)
     return _undistort_points_fisheye(pn, d, rud, n_iter_newton=3, check_validity=check_validity)
-
-
-@numba.njit(error_model='numpy', cache=True)
-def _distort_points_fisheye_nodst(pun, d, rud_valid, check_validity, clip_to_valid):
-    d0, d1, d2, d3 = d
-    _0 = np.float32(0)
-    _1 = np.float32(1)
-    _nan = np.float32(np.nan)
-    ru_valid, rd_valid = rud_valid
-
-    dst = np.empty_like(pun)
-
-    if clip_to_valid:
-        for i in range(pun.shape[0]):
-            pux_old = pun[i, 0]
-            puy_old = pun[i, 1]
-            r2 = pux_old * pux_old + puy_old * puy_old
-            if r2 == _0:
-                dst[i, 0] = _0
-                dst[i, 1] = _0
-            else:
-                r = np.sqrt(r2) if r2 <= ru_valid * ru_valid else ru_valid
-                t = np.arctan(r)
-                t2 = t * t
-                t_d = t * (_1 + t2 * (d0 + t2 * (d1 + t2 * (d2 + t2 * d3))))
-                s = t_d / r
-                dst[i, 0] = pux_old * s
-                dst[i, 1] = puy_old * s
-    else:
-        for i in range(pun.shape[0]):
-            pux_old = pun[i, 0]
-            puy_old = pun[i, 1]
-            r2 = pux_old * pux_old + puy_old * puy_old
-            if check_validity and r2 > ru_valid * ru_valid:
-                dst[i, 0] = _nan
-                dst[i, 1] = _nan
-            elif r2 == _0:
-                dst[i, 0] = _0
-                dst[i, 1] = _0
-            else:
-                r = np.sqrt(r2)
-                t = np.arctan(r)
-                t2 = t * t
-                t_d = t * (_1 + t2 * (d0 + t2 * (d1 + t2 * (d2 + t2 * d3))))
-                s = t_d / r
-                dst[i, 0] = pux_old * s
-                dst[i, 1] = puy_old * s
-    return dst
 
 
 @numba.njit(error_model='numpy', cache=True)

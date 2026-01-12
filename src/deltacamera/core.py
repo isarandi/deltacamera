@@ -5,13 +5,12 @@ import numpy as np
 import shapely
 from scipy.spatial.transform import Rotation
 
-import deltacamera.coordframes
-import deltacamera.distortion
-from deltacamera.decorators import camera_transform, point_transform
-from deltacamera.util import allclose_or_nones, equal_or_nones, unit_vec
+from . import coordframes, distortion
+from .decorators import camera_transform, point_transform
+from .util import allclose_or_nones, equal_or_nones, unit_vec
 
 if TYPE_CHECKING:
-    from deltacamera import Camera
+    from . import Camera
 
 
 class Camera:
@@ -121,30 +120,30 @@ class Camera:
 
         if not self.has_distortion():
             if points.shape[1] == 3:
-                return deltacamera.coordframes.project_and_apply_intrinsics(
+                return coordframes.project_and_apply_intrinsics(
                     points, self.intrinsic_matrix, dst=dst
                 )
             else:
-                return deltacamera.coordframes.apply_intrinsics(
+                return coordframes.apply_intrinsics(
                     points, self.intrinsic_matrix, dst=dst
                 )
 
         if points.shape[1] == 3:
-            pun = deltacamera.coordframes.project(points, dst=dst)
+            pun = coordframes.project(points, dst=dst)
             pn_dst = pun
         else:
             pun = points
             pn_dst = dst
 
         if self.has_fisheye_distortion():
-            pn = deltacamera.distortion.distort_points_fisheye(
+            pn = distortion.distort_points_fisheye(
                 pun, self.distortion_coeffs, check_validity=validate_distortion, dst=pn_dst
             )
         else:
-            pn = deltacamera.distortion.distort_points(
+            pn = distortion.distort_points(
                 pun, self.get_distortion_coeffs(12), check_validity=validate_distortion, dst=pn_dst
             )
-        return deltacamera.coordframes.apply_intrinsics(pn, self.intrinsic_matrix, dst=pn)
+        return coordframes.apply_intrinsics(pn, self.intrinsic_matrix, dst=pn)
 
     @point_transform
     def world_to_camera(self, points: np.ndarray) -> np.ndarray:
@@ -156,7 +155,7 @@ class Camera:
         Returns:
             points in camera coordinates
         """
-        return deltacamera.coordframes.world_to_camera(points, self.R, self.t)
+        return coordframes.world_to_camera(points, self.R, self.t)
 
     @point_transform
     def camera_to_world(self, points: np.ndarray) -> np.ndarray:
@@ -168,7 +167,7 @@ class Camera:
         Returns:
             points in world coordinates
         """
-        return deltacamera.coordframes.camera_to_world(points, self.R, self.t, dst=None)
+        return coordframes.camera_to_world(points, self.R, self.t, dst=None)
 
     @point_transform
     def world_to_image(self, points: np.ndarray, validate_distortion: bool = True) -> np.ndarray:
@@ -181,20 +180,20 @@ class Camera:
             points in image coordinates
         """
         if not self.has_distortion():
-            return deltacamera.coordframes.world_to_image(
+            return coordframes.world_to_image(
                 points, self.intrinsic_matrix, self.R, self.t
             )
 
-        pun = deltacamera.coordframes.world_to_undist(points, self.R, self.t)
+        pun = coordframes.world_to_undist(points, self.R, self.t)
         if self.has_fisheye_distortion():
-            pn = deltacamera.distortion.distort_points_fisheye(
+            pn = distortion.distort_points_fisheye(
                 pun, self.distortion_coeffs, check_validity=validate_distortion, dst=pun
             )
         else:
-            pn = deltacamera.distortion.distort_points(
+            pn = distortion.distort_points(
                 pun, self.get_distortion_coeffs(12), check_validity=validate_distortion, dst=pun
             )
-        return deltacamera.coordframes.apply_intrinsics(pn, self.intrinsic_matrix, dst=pn)
+        return coordframes.apply_intrinsics(pn, self.intrinsic_matrix, dst=pn)
 
     @point_transform
     def image_to_camera(
@@ -215,28 +214,28 @@ class Camera:
         """
         if not self.has_distortion():
             if depth is None:
-                return deltacamera.coordframes.undo_intrinsics(
+                return coordframes.undo_intrinsics(
                     points, self.intrinsic_matrix, dst=dst
                 )
             elif np.isscalar(depth):
-                return deltacamera.coordframes.backproject_K_depthval(
+                return coordframes.backproject_K_depthval(
                     points, self.intrinsic_matrix, np.float32(depth), dst=dst
                 )
             else:
                 depth = depth.reshape(-1).astype(np.float32)
-                return deltacamera.coordframes.backproject_K_deptharr(
+                return coordframes.backproject_K_deptharr(
                     points, self.intrinsic_matrix, depth, dst=dst
                 )
 
-        pn = deltacamera.coordframes.undo_intrinsics(points, self.intrinsic_matrix, dst=None)
+        pn = coordframes.undo_intrinsics(points, self.intrinsic_matrix, dst=None)
         if self.has_fisheye_distortion():
-            pun = deltacamera.distortion.undistort_points_fisheye(
+            pun = distortion.undistort_points_fisheye(
                 pn,
                 self.distortion_coeffs,
                 check_validity=validate_distortion,
             )
         else:
-            pun = deltacamera.distortion.undistort_points(
+            pun = distortion.undistort_points(
                 pn,
                 self.get_distortion_coeffs(12),
                 check_validity=validate_distortion,
@@ -250,12 +249,12 @@ class Camera:
                 return pun
         elif np.isscalar(depth):
             if depth == 1.0:
-                return deltacamera.coordframes.backproject_homogeneous(pun, dst=dst)
+                return coordframes.backproject_homogeneous(pun, dst=dst)
             else:
-                return deltacamera.coordframes.backproject_depthval(pun, np.float32(depth), dst=dst)
+                return coordframes.backproject_depthval(pun, np.float32(depth), dst=dst)
         else:
             depth = depth.reshape(-1).astype(np.float32)
-            return deltacamera.coordframes.backproject_deptharr(pun, depth, dst=dst)
+            return coordframes.backproject_deptharr(pun, depth, dst=dst)
 
     @point_transform
     def image_to_world(
@@ -272,7 +271,7 @@ class Camera:
         """
 
         pcam = self.image_to_camera(points, camera_depth)
-        return deltacamera.coordframes.camera_to_world(pcam, self.R, self.t, dst=pcam)
+        return coordframes.camera_to_world(pcam, self.R, self.t, dst=pcam)
 
     @point_transform
     def is_visible(
@@ -300,9 +299,9 @@ class Camera:
         # if check_distortion and self.has_distortion():
         #     # Check if the point is within the distortion limits
         #     checker_func = (
-        #         deltacamera.validity.are_points_in_valid_region_fisheye
+        #         validity.are_points_in_valid_region_fisheye
         #         if self.has_fisheye_distortion()
-        #         else deltacamera.validity.are_points_in_valid_region
+        #         else validity.are_points_in_valid_region
         #     )
         #     is_valid[is_valid] = checker_func(
         #         from_homogeneous(cam_points[is_valid]), self.distortion_coeffs
@@ -525,7 +524,7 @@ class Camera:
             return cam, None, None
         else:
             cam.intrinsic_matrix, box, poly = (
-                deltacamera.validity.get_optimal_undistorted_intrinsics(
+                validity.get_optimal_undistorted_intrinsics(
                     cam,
                     imshape_distorted,
                     imshape_undistorted,
@@ -611,14 +610,14 @@ class Camera:
         coordinates in image space.
         This is only applicable if the camera has no distortion.
         """
-        return deltacamera.coordframes.get_projection_matrix3x4(
+        return coordframes.get_projection_matrix3x4(
             self.intrinsic_matrix, self.R, self.t
         )
 
     def get_extrinsic_matrix(self) -> np.ndarray:
         """Get the 4x4 extrinsic transformation matrix that maps 3D points in world space to
         3D points in camera space."""
-        return deltacamera.coordframes.get_extrinsic_matrix(self.R, self.t)
+        return coordframes.get_extrinsic_matrix(self.R, self.t)
 
     @property
     def extrinsic_matrix(self):
@@ -632,7 +631,7 @@ class Camera:
     def get_inv_extrinsic_matrix(self) -> np.ndarray:
         """Get the 4x4 extrinsic transformation matrix that maps 3D points in camera space to
         3D points in world space."""
-        return deltacamera.coordframes.get_inv_extrinsic_matrix(self.R, self.t)
+        return coordframes.get_inv_extrinsic_matrix(self.R, self.t)
 
     def get_fov(self, imshape) -> float:
         """Get the field of view of the camera in degrees.
@@ -803,7 +802,7 @@ def visible_subbox(old_camera, new_camera, old_imshape, new_box):
     Returns:
         The sub-box of `new_box` (x, y, w, h) as described.
     """
-    valid_poly = deltacamera.validity.get_valid_poly_reproj(
+    valid_poly = validity.get_valid_poly_reproj(
         old_camera, new_camera, old_imshape[:2], None
     )
     s_box = shapely.Polygon.from_bounds(*new_box[:2], *(new_box[:2] + new_box[2:]))

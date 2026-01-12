@@ -1,7 +1,7 @@
 import itertools
 
 import deltacamera
-import deltacamera.validity
+from . import validity
 import numpy as np
 
 
@@ -32,7 +32,7 @@ def precompile():
         deltacamera.reproject_image_points(points, cam1, cam2)
         deltacamera.reproject_mask(im, cam1, cam2, imshape)
         for imshape1, imshape2 in itertools.product([imshape, None], repeat=2):
-            deltacamera.validity.get_valid_poly_reproj(
+            validity.get_valid_poly_reproj(
                 cam1, cam2, imshape_old=imshape1, imshape_new=imshape2
             )
 

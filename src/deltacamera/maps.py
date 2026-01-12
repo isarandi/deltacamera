@@ -5,15 +5,11 @@ import numba
 import numpy as np
 import rlemasklib
 
-import deltacamera.core
-import deltacamera.coordframes
-import deltacamera.distortion
-import deltacamera.maps_impl
-import deltacamera.validity
+from . import core, coordframes, distortion, maps_impl, validity
 
 
 def make_maps(old_camera, new_camera, output_imshape, precomp_undist_maps):
-    p_old = deltacamera.maps_impl.make(
+    p_old = maps_impl.make(
         output_imshape[0],
         output_imshape[1],
         old_camera,
@@ -86,7 +82,7 @@ def cam2dict(camera):
 
 def dict2cam(dicti):
     dicti = msgpack_numpy.unpackb(dicti)
-    return deltacamera.core.Camera(
+    return core.Camera(
         intrinsic_matrix=dicti["K"],
         rot_world_to_cam=dicti["R"],
         optical_center=dicti["t"],

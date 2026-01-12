@@ -1,11 +1,7 @@
 import functools
 from typing import TYPE_CHECKING
 
-import deltacamera.core
-import deltacamera.coordframes
-import deltacamera.distortion
-import deltacamera.reprojection
-import deltacamera.util
+from . import core, coordframes, distortion, reprojection, util
 import cv2
 import numba
 import numpy as np
@@ -73,7 +69,7 @@ def get_valid_distortion_region(
     if camera.has_fisheye_distortion():
         return get_valid_distortion_region_fisheye(camera, n_vertices, cartesian)
 
-    dist_coeffs = camera.get_distortion_coeffs(12)
+    dist_coeffs = camera.get_distortion_coeffs(14)
     (ru, tu), (rd, td) = get_valid_distortion_region_cached(
         dist_coeffs.tobytes(),
         limit,
@@ -127,7 +123,7 @@ def are_points_in_valid_region(points_undist: np.ndarray, d: np.ndarray) -> np.n
 
     Args:
         points_undist: Points in normalized image space, shape `(n_points, 2)`.
-        d: Distortion coefficients (at most 12), according to OpenCV's order.
+        d: Distortion coefficients (up to 14), according to OpenCV's order.
 
     Returns:
         Boolean array of shape `(n_points,)` indicating if the points are within the valid region.
@@ -144,7 +140,7 @@ def are_normalized_distorted_points_in_valid_region(
 
     Args:
         points: Points in normalized distorted image space, shape `(n_points, 2)`.
-        d: Distortion coefficients (at most 12), according to OpenCV's order.
+        d: Distortion coefficients (up to 14), according to OpenCV's order.
 
     Returns:
         Boolean array of shape `(n_points,)` indicating if the points are within the valid region.
@@ -195,7 +191,7 @@ def shape_undistorted_to_image(camera, shape):
 
 def shape_apply_intrinsics(camera, shape):
     K = camera.intrinsic_matrix
-    return shape_transform(lambda x: deltacamera.coordframes.apply_intrinsics(x, K, dst=x), shape)
+    return shape_transform(lambda x: coordframes.apply_intrinsics(x, K, dst=x), shape)
 
 
 @numba.njit(error_model='numpy', cache=True)
@@ -232,7 +228,7 @@ def _get_valid_distortion_region_polar(
 
     # Convert boundary to distorted space
     pu = polar_to_cartesian(radii_dense, theta_dense)
-    pn = deltacamera.distortion._distort_points(
+    pn = distortion._distort_points(
         pu, d, polar_ud_valid=None, check_validity=False, clip_to_valid=False, dst=pu
     )
     radii_dense_distorted, theta_dense_distorted = cartesian_to_polar(pn)
@@ -316,19 +312,49 @@ def newton_optimize(r, t, d, n_iter):
     return r_new
 
 
+@numba.njit(error_model='numpy', cache=True, inline='always')
+def _precompute_tilt(tau_x, tau_y):
+    """Precompute tilt parameters to avoid repeated trig in hot loops."""
+    cx = np.cos(tau_x)
+    sx = np.sin(tau_x)
+    cy = np.cos(tau_y)
+    sy = np.sin(tau_y)
+    return sy, cy * sx, cy * cx
+
+
 @numba.njit(error_model='numpy', cache=True)
 def jacobian_det_polar(r, t, d):
-    """Jacobian determinant of the Brown-Conrady distortion at polar coords (r, t).
+    """Jacobian determinant of the 14-param distortion at polar coords (r, t).
 
     Returns det(J) where J = d(x_distorted, y_distorted) / d(x, y).
     Zero crossings mark the boundary where distortion becomes non-invertible.
+
+    Supports both 12-param and 14-param distortion. When tilt params (d[12], d[13])
+    are zero or absent, falls back to pure 12-param computation.
     """
-    k0, k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11 = d
+    tau_x = d[12] if len(d) > 12 else 0.0
+    tau_y = d[13] if len(d) > 13 else 0.0
+    if tau_x == 0.0 and tau_y == 0.0:
+        return _jacobian_det_polar_impl(r, t, d, 0.0, 0.0, 1.0)
+    sy, cy_sx, cy_cx = _precompute_tilt(tau_x, tau_y)
+    return _jacobian_det_polar_impl(r, t, d, sy, cy_sx, cy_cx)
 
-    _1 = np.float32(1)
-    _2 = np.float32(2)
-    _4 = np.float32(4)
 
+@numba.njit(error_model='numpy', cache=True)
+def _jacobian_det_polar_impl(r, t, d, sy, cy_sx, cy_cx):
+    """Jacobian determinant with precomputed tilt parameters.
+
+    The 14-param distortion is: tilt(12param(x, y))
+    So det(J) = det(J_tilt) * det(J_12param)
+    where det(J_tilt) = 1 / z^3.
+    """
+    k0, k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11 = d[:12]
+
+    _1 = np.float64(1)
+    _2 = np.float64(2)
+    _4 = np.float64(4)
+
+    # 12-param Jacobian determinant
     x0 = np.sin(t)
     x1 = np.cos(t)
     x2 = _2 * r
@@ -357,37 +383,63 @@ def jacobian_det_polar(r, t, d):
     x20 = x0 * x14
     x21 = k11 * x6
     x22 = k10 + k2
-    return (x0 * x3 + x15) * (r * (_4 * x16 + _2 * x17 + x1 * x19) + x15) - (x1 * x3 - x20) * (
+
+    det_12param = (x0 * x3 + x15) * (r * (_4 * x16 + _2 * x17 + x1 * x19) + x15) - (x1 * x3 - x20) * (
         r * (_4 * x21 + _2 * x22 + x0 * x19) + x20
     )
+
+    # If no tilt (cy_cx == 1 means tau_x = tau_y = 0), return 12-param determinant
+    if cy_cx == 1.0 and sy == 0.0:
+        return det_12param
+
+    # Compute distorted point (x_d, y_d) using 12-param
+    a = (x6 * (k0 + x6 * (k1 + k4 * x6)) + _1) / (x6 * (k5 + x6 * (k6 + k7 * x6)) + _1)
+    b = _2 * (k3 * r * x1 + k2 * r * x0)
+    c1 = x6 * (k3 + k8 + k9 * x6)
+    c2 = x6 * (k2 + k10 + k11 * x6)
+    x_d = r * x1 * (a + b) + c1
+    y_d = r * x0 * (a + b) + c2
+
+    # z = r20*x_d + r21*y_d + r22 where r20=-sy, r21=cy_sx, r22=cy_cx
+    z = -sy * x_d + cy_sx * y_d + cy_cx
+
+    # det(J_tilt) = 1 / z^3
+    inv_z = _1 / z
+    det_tilt = inv_z * inv_z * inv_z
+
+    return det_12param * det_tilt
 
 
 @numba.njit(error_model='numpy', cache=True)
 def jacobian_det_and_prime_polar(r, t, d):
-    r"""Jacobian determinant of the distortion function at a point in polar coordinates, and the
-    derivative of this w.r.t. r.
+    r"""Jacobian determinant and its derivative w.r.t. r for 14-param distortion.
 
-    Let us denote the distorted coordinates as :math:`(\tilde{x}, \tilde{y})` and the undistorted
-    coordinates as :math:`(x, y)`.
+    Returns (f, df/dr) where f = det(J) at polar coordinates (r, t).
+    Used for Newton optimization to find the boundary of the valid region.
 
-    This function returns :math:`f(r, \theta)` and :math:`\frac{\partial f(r, \theta)}{\partial r}`
-    with
-
-    .. math::
-
-        f(r, \theta) = \det\left(\frac{\boldsymbol{\partial}(\tilde{x},\tilde{y})}{\boldsymbol{\partial} (x, y)}
-        \bigg|_{(r\cos\theta, r\sin\theta)}\right)
-
-    The roots of :math:`f(r, \theta)` are the points where the distortion function is locally
-    non-invertible, hence the boundary of the valid region of distortion.
+    Supports both 12-param and 14-param distortion. When tilt params (d[12], d[13])
+    are zero or absent, falls back to pure 12-param computation.
     """
+    tau_x = d[12] if len(d) > 12 else 0.0
+    tau_y = d[13] if len(d) > 13 else 0.0
+    if tau_x == 0.0 and tau_y == 0.0:
+        return _jacobian_det_and_prime_polar_impl(r, t, d, 0.0, 0.0, 1.0)
+    sy, cy_sx, cy_cx = _precompute_tilt(tau_x, tau_y)
+    return _jacobian_det_and_prime_polar_impl(r, t, d, sy, cy_sx, cy_cx)
 
-    k0, k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11 = d
-    _1 = np.float32(1)
-    _2 = np.float32(2)
-    _4 = np.float32(4)
-    _6 = np.float32(6)
 
+@numba.njit(error_model='numpy', cache=True)
+def _jacobian_det_and_prime_polar_impl(r, t, d, sy, cy_sx, cy_cx):
+    """Jacobian determinant and derivative with precomputed tilt parameters."""
+    k0, k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11 = d[:12]
+
+    _1 = np.float64(1)
+    _2 = np.float64(2)
+    _3 = np.float64(3)
+    _4 = np.float64(4)
+    _6 = np.float64(6)
+
+    # Compute 12-param determinant and derivative
     x0 = np.sin(t)
     x1 = np.cos(t)
     x2 = k2 * x1
@@ -443,15 +495,67 @@ def jacobian_det_and_prime_polar(r, t, d):
         - x32 * (_2 * (k5 + x16) + x28 * x45 + x44 * (k6 + _6 * x14))
     )
 
-    fval = x22 * (r * (_4 * x23 + _2 * x24 + x34) + x21) - x36 * (
+    fval_12 = x22 * (r * (_4 * x23 + _2 * x24 + x34) + x21) - x36 * (
         r * (_4 * x37 + _2 * x38 + x39) + x35
     )
-    deriv = (
+    deriv_12 = (
         x22 * (r * (k9 * x43 + x1 * x46) + _6 * x23 + _2 * x34 + x42)
         - x36 * (r * (k11 * x43 + x0 * x46) + _6 * x37 + _2 * x39 + x41)
         + (r * (_4 * x23 + x34 + x42) + x21) * (x0 * x40 + x34)
         - (r * (_4 * x37 + x39 + x41) + x35) * (x1 * x40 - x39)
     )
+
+    # If no tilt, return 12-param values
+    if cy_cx == 1.0 and sy == 0.0:
+        return fval_12, deriv_12
+
+    # Compute distorted point (x_d, y_d) and its derivative w.r.t. r
+    numer = x8 * (k0 + x8 * (k1 + k4 * x8)) + _1
+    denom = x8 * (k5 + x8 * (k6 + k7 * x8)) + _1
+    a = numer / denom
+    b = _2 * (k3 * r * x1 + k2 * r * x0)
+    c1 = x8 * (k3 + k8 + k9 * x8)
+    c2 = x8 * (k2 + k10 + k11 * x8)
+    s = a + b
+    x_d = r * x1 * s + c1
+    y_d = r * x0 * s + c2
+
+    # Derivative of distorted point w.r.t. r
+    k2_p_k10 = k2 + k10
+    k3_p_k8 = k3 + k8
+
+    # da/dr = da/d(r^2) * 2r
+    r4 = x8 * x8
+    dnumer_dr2 = k0 + _2 * k1 * x8 + _3 * k4 * r4
+    ddenom_dr2 = k5 + _2 * k6 * x8 + _3 * k7 * r4
+    da_dr = (dnumer_dr2 * denom - numer * ddenom_dr2) / (denom * denom) * _2 * r
+
+    # db/dr = 2*(k3*cos(t) + k2*sin(t))
+    db_dr = _2 * (k3 * x1 + k2 * x0)
+
+    # dc1/dr = 2r*(k3+k8+2*k9*r2), dc2/dr = 2r*(k2+k10+2*k11*r2)
+    dc1_dr = _2 * r * (k3_p_k8 + _2 * k9 * x8)
+    dc2_dr = _2 * r * (k2_p_k10 + _2 * k11 * x8)
+
+    # dx_d/dr = cos(t)*(a+b) + r*cos(t)*(da/dr+db/dr) + dc1/dr
+    ds_dr = da_dr + db_dr
+    dx_d_dr = x1 * s + r * x1 * ds_dr + dc1_dr
+    dy_d_dr = x0 * s + r * x0 * ds_dr + dc2_dr
+
+    # Tilt: z = -sy*x_d + cy_sx*y_d + cy_cx
+    z = -sy * x_d + cy_sx * y_d + cy_cx
+    dz_dr = -sy * dx_d_dr + cy_sx * dy_d_dr
+
+    # det(J_tilt) = 1 / z^3, d(det_tilt)/dr = -3/z^4 * dz/dr
+    inv_z = _1 / z
+    inv_z3 = inv_z * inv_z * inv_z
+    det_tilt = inv_z3
+    ddet_tilt_dr = -_3 * inv_z3 * inv_z * dz_dr
+
+    # Total: det = det_12 * det_tilt
+    # d(det)/dr = det_12' * det_tilt + det_12 * det_tilt'
+    fval = fval_12 * det_tilt
+    deriv = deriv_12 * det_tilt + fval_12 * ddet_tilt_dr
 
     return fval, deriv
 
@@ -539,16 +643,17 @@ def get_valid_poly(camera: "Camera", imshape=None):
         return shape_transform(camera.camera_to_image, su_box)
 
     elif camera.has_nonfisheye_distortion():
-        pun_valid = get_valid_distortion_region(camera, cartesian=True) * np.float32(0.99)
-        pn_valid = deltacamera.distortion._distort_points(
+        pun_valid, _ = get_valid_distortion_region(camera, cartesian=True)
+        pun_valid = pun_valid * np.float32(0.99)
+        pn_valid = distortion._distort_points(
             pun_valid,
-            camera.get_distortion_coeffs(12),
+            camera.get_distortion_coeffs(14),
             polar_ud_valid=None,
             check_validity=False,
             clip_to_valid=False,
             dst=pun_valid,
         )
-        p_valid = deltacamera.coordframes.apply_intrinsics(
+        p_valid = coordframes.apply_intrinsics(
             pn_valid, camera.intrinsic_matrix, dst=pn_valid
         )
 
@@ -576,7 +681,7 @@ def get_valid_poly_reproj(old_camera, new_camera, imshape_old=None, imshape_new=
     near_z = np.float32(1e-3)
     far_z = np.float32(1e6)
 
-    if np.allclose(new_camera.R, old_camera.R) and deltacamera.util.allclose_or_nones(
+    if np.allclose(new_camera.R, old_camera.R) and util.allclose_or_nones(
         new_camera.distortion_coeffs, old_camera.distortion_coeffs
     ):
         return get_valid_poly_reproj_affine(old_camera, new_camera, imshape_old, imshape_new)
@@ -659,7 +764,7 @@ def get_valid_poly_reproj_affine(old_camera, new_camera, imshape_old=None, imsha
             s_new_of_new = s_new_of_new_box & shapely.make_valid(s_new_of_new)
 
         s_new_of_old = shape_transform(
-            lambda x: deltacamera.coordframes.reproject_intrinsics(
+            lambda x: coordframes.reproject_intrinsics(
                 x, old_camera.intrinsic_matrix, new_camera.intrinsic_matrix
             ),
             s_old_of_old,
@@ -669,7 +774,7 @@ def get_valid_poly_reproj_affine(old_camera, new_camera, imshape_old=None, imsha
         if imshape_old is not None:
             s_old_of_old = shapely.box(0, 0, imshape_old[1], imshape_old[0])
             s_new_of_old = shape_transform(
-                lambda x: deltacamera.coordframes.reproject_intrinsics(
+                lambda x: coordframes.reproject_intrinsics(
                     x, old_camera.intrinsic_matrix, new_camera.intrinsic_matrix
                 ),
                 s_old_of_old,
@@ -919,7 +1024,7 @@ def get_optimal_undistorted_intrinsics(
     new_camera.intrinsic_matrix[0, 1] = 0
 
     # Get valid region polygon and its bounding box (outer_box)
-    valid_poly: shapely.Polygon = deltacamera.validity.get_valid_poly_reproj(
+    valid_poly: shapely.Polygon = validity.get_valid_poly_reproj(
         old_camera, new_camera, old_imshape, imshape_new=None
     )
     x1, y1, x2, y2 = valid_poly.bounds

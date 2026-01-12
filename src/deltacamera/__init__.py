@@ -1,4 +1,4 @@
-"""Lensform: Camera calibration manipulation and image warping for computer vision.
+"""Deltacamera: Camera calibration manipulation and image warping for computer vision.
 
 This library provides coordinate transformations between world, camera, and image spaces
 with support for Brown-Conrady and Kannala-Brandt (fisheye) lens distortion models.
@@ -37,15 +37,15 @@ __all__ = [
     "get_valid_mask_reproj",
 ]
 
-from deltacamera.core import (
+from .core import (
     Camera,
     intrinsics_from_fov,
     visible_subbox,
 )
 
-from deltacamera.vanishing_point_gui import estimate_fov_from_vanishing_points
+from .vanishing_point_gui import estimate_fov_from_vanishing_points
 
-from deltacamera.reprojection import (
+from .reprojection import (
     decode_srgb,
     encode_srgb,
     reproject_box,
@@ -59,7 +59,7 @@ from deltacamera.reprojection import (
     reproject_rle_mask,
 )
 
-from deltacamera.validity import (
+from .validity import (
     get_valid_mask,
     get_valid_mask_reproj,
 )
