@@ -59,7 +59,7 @@ jobs:
       - name: Verify package
         run: |
           pip install dist/*.whl
-          python -c "import cameravision; print(cameravision.__version__)"
+          python -c "import deltacamera; print(deltacamera.__version__)"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -70,9 +70,6 @@ jobs:
     name: Publish to PyPI
     needs: build
     runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      id-token: write  # Required for trusted publishing
     # Only publish on release, not on workflow_dispatch
     if: github.event_name == 'release'
 
@@ -84,3 +81,5 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
