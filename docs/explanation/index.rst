@@ -8,3 +8,4 @@ In-depth explanations of how deltacamera works.
 
    reprojection
    distortion-validity
+   sympy-codegen
