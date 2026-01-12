@@ -43,7 +43,7 @@ from .core import (
     visible_subbox,
 )
 
-from .vanishing_point_gui import estimate_fov_from_vanishing_points
+from .intrinsics import estimate_fov_from_vanishing_points
 
 from .reprojection import (
     decode_srgb,
