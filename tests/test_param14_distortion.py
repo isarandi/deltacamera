@@ -159,19 +159,21 @@ class TestTiltTransformations:
         np.testing.assert_allclose(recovered, points, atol=1e-6)
 
     def test_tilt_rotation_matrix(self):
-        """Verify tilt rotation matches expected Ry @ Rx."""
+        """Verify tilt matches OpenCV's matTilt = matProjZ @ Rx @ Ry convention."""
         tau_x = 0.05
         tau_y = -0.03
 
-        # Build rotation manually
-        Rx = Rotation.from_euler('x', tau_x).as_matrix()
-        Ry = Rotation.from_euler('y', tau_y).as_matrix()
-        R = Ry @ Rx
+        # OpenCV tilt homography (matTilt in OpenCV docs)
+        # matTilt = [[cx,      0,       0     ],
+        #            [-sx*sy,  cy,      0     ],
+        #            [sy,      -cy*sx,  cy*cx ]]
+        cx, sx = np.cos(tau_x), np.sin(tau_x)
+        cy, sy = np.cos(tau_y), np.sin(tau_y)
 
         # Test point
-        p = np.array([0.2, 0.15, 1.0])
-        p_rot = R @ p
-        expected = p_rot[:2] / p_rot[2]
+        x, y = 0.2, 0.15
+        w = sy * x + (-cy * sx) * y + cy * cx
+        expected = np.array([cx * x / w, (-sx * sy * x + cy * y) / w])
 
         # Apply through our distortion (with zero radial/tangential)
         d = np.zeros(14, dtype=np.float64)
@@ -181,7 +183,7 @@ class TestTiltTransformations:
         points = np.array([[0.2, 0.15]], dtype=np.float64)
         result = distort_points(points, d)
 
-        # float32 precision limits accuracy to ~1e-7
+        # float32 precision limits accuracy to ~1e-6
         np.testing.assert_allclose(result[0], expected, atol=1e-6)
 
 

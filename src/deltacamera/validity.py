@@ -431,8 +431,8 @@ def _jacobian_det_polar_impl(r, t, d, sy, cy_sx, cy_cx):
     x_d = r * x1 * (a + b) + c1
     y_d = r * x0 * (a + b) + c2
 
-    # z = r20*x_d + r21*y_d + r22 where r20=-sy, r21=cy_sx, r22=cy_cx
-    z = -sy * x_d + cy_sx * y_d + cy_cx
+    # z = r20*x_d + r21*y_d + r22 where r20=sy, r21=-cy_sx, r22=cy_cx
+    z = sy * x_d - cy_sx * y_d + cy_cx
 
     # det(J_tilt) = 1 / z^3
     inv_z = _1 / z
@@ -573,9 +573,9 @@ def _jacobian_det_and_prime_polar_impl(r, t, d, sy, cy_sx, cy_cx):
     dx_d_dr = x1 * s + r * x1 * ds_dr + dc1_dr
     dy_d_dr = x0 * s + r * x0 * ds_dr + dc2_dr
 
-    # Tilt: z = -sy*x_d + cy_sx*y_d + cy_cx
-    z = -sy * x_d + cy_sx * y_d + cy_cx
-    dz_dr = -sy * dx_d_dr + cy_sx * dy_d_dr
+    # Tilt: z = sy*x_d - cy_sx*y_d + cy_cx
+    z = sy * x_d - cy_sx * y_d + cy_cx
+    dz_dr = sy * dx_d_dr - cy_sx * dy_d_dr
 
     # det(J_tilt) = 1 / z^3, d(det_tilt)/dr = -3/z^4 * dz/dr
     inv_z = _1 / z
