@@ -1,5 +1,6 @@
 import functools
 import typing
+import warnings
 
 import boxlib
 import cv2
@@ -11,6 +12,27 @@ from . import coordframes, distortion, maps, points_impl, util, validity
 
 if typing.TYPE_CHECKING:
     from . import Camera
+
+
+def _resolve_output_imshape(output_imshape, new_camera, param_name="output_imshape"):
+    """Resolve output image shape from parameter or camera.image_shape.
+
+    Emits deprecation warning if explicit parameter is provided.
+    """
+    if output_imshape is not None:
+        warnings.warn(
+            f"{param_name} parameter is deprecated. Set new_camera.image_shape instead.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        return output_imshape
+    elif new_camera.image_shape is not None:
+        return new_camera.image_shape
+    else:
+        raise ValueError(
+            f"Output image shape not specified. Either pass {param_name} "
+            "or set new_camera.image_shape."
+        )
 
 
 def reproject_image_points(
@@ -45,7 +67,7 @@ def reproject_image(
     image: np.ndarray,
     old_camera: "Camera",
     new_camera: "Camera",
-    output_imshape: tuple,
+    output_imshape: tuple = None,
     border_mode: int = cv2.BORDER_CONSTANT,
     border_value=0,
     interp=None,
@@ -94,6 +116,8 @@ def reproject_image(
     Returns:
         The new image.
     """
+    output_imshape = _resolve_output_imshape(output_imshape, new_camera)
+
     if use_linear_srgb:
         image = decode_srgb(image, dst=None) if use_linear_srgb else image
 
@@ -189,9 +213,7 @@ def reproject_image_aliased(
     if (
         not cache_maps
         and np.allclose(new_camera.R, old_camera.R)
-        and util.allclose_or_nones(
-            new_camera.distortion_coeffs, old_camera.distortion_coeffs
-        )
+        and new_camera._distortion_model == old_camera._distortion_model
     ):
         # Only the intrinsics have changed we can use an affine warp
         remapped = reproject_image_affine(
@@ -203,7 +225,7 @@ def reproject_image_aliased(
         mask_image_by_rle(remapped, ~is_valid_rle, border_value)
         return remapped, is_valid_rle
 
-    maps, is_valid_rle = maps.get_maps_and_mask(
+    remap_maps, is_valid_rle = maps.get_maps_and_mask(
         old_camera,
         new_camera,
         image.shape[:2],
@@ -212,7 +234,7 @@ def reproject_image_aliased(
         precomp_undist_maps=precomp_undist_maps,
     )
     remapped = cv2.remap(
-        image, maps, None, interp, borderMode=border_mode, borderValue=border_value, dst=dst
+        image, remap_maps, None, interp, borderMode=border_mode, borderValue=border_value, dst=dst
     )
     if remapped.ndim < image.ndim:
         remapped = np.expand_dims(remapped, -1)
@@ -307,13 +329,14 @@ def reproject_image_fast(
     image,
     old_camera,
     new_camera,
-    output_imshape,
+    output_imshape=None,
     border_mode=cv2.BORDER_CONSTANT,
     border_value=None,
     interp=cv2.INTER_LINEAR,
     dst=None,
 ):
     """Like reproject_image, but assumes there are no lens distortions."""
+    output_imshape = _resolve_output_imshape(output_imshape, new_camera)
     homography = coordframes.mul_K_M_Kinv(
         old_camera.intrinsic_matrix, old_camera.R @ new_camera.R.T, new_camera.intrinsic_matrix
     )
@@ -340,12 +363,13 @@ def reproject_image_affine(
     image,
     old_camera,
     new_camera,
-    output_imshape,
+    output_imshape=None,
     border_mode=cv2.BORDER_CONSTANT,
     border_value=0,
     interp=cv2.INTER_LINEAR,
     dst=None,
 ):
+    output_imshape = _resolve_output_imshape(output_imshape, new_camera)
     K_new = new_camera.intrinsic_matrix
     K_old = old_camera.intrinsic_matrix
     affine_mat_2x3 = coordframes.relative_intrinsics(K_new, K_old)[:2]

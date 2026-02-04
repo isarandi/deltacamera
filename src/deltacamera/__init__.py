@@ -20,6 +20,10 @@ __all__ = [
     "intrinsics_from_fov",
     "estimate_fov_from_vanishing_points",
     "visible_subbox",
+    # Distortion models
+    "LensDistortionModel",
+    "FisheyeKannalaBrandt",
+    "BrownConrady",
     # Reprojection
     "reproject_box",
     "reproject_box_corners",
@@ -41,6 +45,12 @@ from .core import (
     Camera,
     intrinsics_from_fov,
     visible_subbox,
+)
+
+from .distortion_models import (
+    BrownConrady,
+    FisheyeKannalaBrandt,
+    LensDistortionModel,
 )
 
 from .intrinsics import estimate_fov_from_vanishing_points

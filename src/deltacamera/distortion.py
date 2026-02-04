@@ -78,16 +78,15 @@ def _distort_points(pun, d, polar_ud_valid, check_validity, clip_to_valid, dst):
     tau_y = d[13] if len(d) > 13 else np.float32(0)
     has_tilt = tau_x != 0.0 or tau_y != 0.0
 
-    # Precompute tilt rotation if needed
+    # Precompute tilt matrix if needed (matching OpenCV's convention)
     if has_tilt:
         cx = np.cos(tau_x)
         sx = np.sin(tau_x)
         cy = np.cos(tau_y)
         sy = np.sin(tau_y)
-        # R = Ry @ Rx rotation matrix elements
-        r00, r01, r02 = cy, sy * sx, sy * cx
-        r10, r11, r12 = np.float32(0), cx, -sx
-        r20, r21, r22 = -sy, cy * sx, cy * cx
+        t00, t01, t02 = cx, np.float32(0), np.float32(0)
+        t10, t11, t12 = -sx * sy, cy, np.float32(0)
+        t20, t21, t22 = sy, -cy * sx, cy * cx
 
     if dst is None:
         dst = np.empty_like(pun)
@@ -123,9 +122,9 @@ def _distort_points(pun, d, polar_ud_valid, check_validity, clip_to_valid, dst):
             y_d = puy * s + cy_dist
 
             if has_tilt:
-                w = r20 * x_d + r21 * y_d + r22
-                dst[i, 0] = (r00 * x_d + r01 * y_d + r02) / w
-                dst[i, 1] = (r10 * x_d + r11 * y_d + r12) / w
+                w = t20 * x_d + t21 * y_d + t22
+                dst[i, 0] = (t00 * x_d + t01 * y_d + t02) / w
+                dst[i, 1] = (t10 * x_d + t11 * y_d + t12) / w
             else:
                 dst[i, 0] = x_d
                 dst[i, 1] = y_d
@@ -157,9 +156,9 @@ def _distort_points(pun, d, polar_ud_valid, check_validity, clip_to_valid, dst):
             y_d = puy * s + cy_dist
 
             if has_tilt:
-                w = r20 * x_d + r21 * y_d + r22
-                dst[i, 0] = (r00 * x_d + r01 * y_d + r02) / w
-                dst[i, 1] = (r10 * x_d + r11 * y_d + r12) / w
+                w = t20 * x_d + t21 * y_d + t22
+                dst[i, 0] = (t00 * x_d + t01 * y_d + t02) / w
+                dst[i, 1] = (t10 * x_d + t11 * y_d + t12) / w
             else:
                 dst[i, 0] = x_d
                 dst[i, 1] = y_d
@@ -177,9 +176,9 @@ def _distort_points(pun, d, polar_ud_valid, check_validity, clip_to_valid, dst):
             y_d = puy * s + cy_dist
 
             if has_tilt:
-                w = r20 * x_d + r21 * y_d + r22
-                dst[i, 0] = (r00 * x_d + r01 * y_d + r02) / w
-                dst[i, 1] = (r10 * x_d + r11 * y_d + r12) / w
+                w = t20 * x_d + t21 * y_d + t22
+                dst[i, 0] = (t00 * x_d + t01 * y_d + t02) / w
+                dst[i, 1] = (t10 * x_d + t11 * y_d + t12) / w
             else:
                 dst[i, 0] = x_d
                 dst[i, 1] = y_d
@@ -221,9 +220,10 @@ def _distort_points_with_jacobian(pun, d, dst, jac_dst):
         sx = np.sin(tau_x)
         cy = np.cos(tau_y)
         sy = np.sin(tau_y)
-        r00, r01, r02 = cy, sy * sx, sy * cx
-        r10, r11, r12 = _0, cx, -sx
-        r20, r21, r22 = -sy, cy * sx, cy * cx
+        # OpenCV-compatible tilt matrix (matTilt = matProjZ @ matRotXY)
+        t00, t01, t02 = cx, _0, _0
+        t10, t11, t12 = -sx * sy, cy, _0
+        t20, t21, t22 = sy, -cy * sx,  cy * cx
 
     k2_p_k10 = k2 + k10
     k3_p_k8 = k3 + k8
@@ -269,16 +269,16 @@ def _distort_points_with_jacobian(pun, d, dst, jac_dst):
 
         if has_tilt:
             # Apply tilt
-            w = r20 * x_d + r21 * y_d + r22
+            w = t20 * x_d + t21 * y_d + t22
             inv_w = _1 / w
-            x_out = (r00 * x_d + r01 * y_d + r02) * inv_w
-            y_out = (r10 * x_d + r11 * y_d + r12) * inv_w
+            x_out = (t00 * x_d + t01 * y_d + t02) * inv_w
+            y_out = (t10 * x_d + t11 * y_d + t12) * inv_w
 
             # Jacobian of tilt w.r.t. (x_d, y_d)
-            jt00 = (r00 - x_out * r20) * inv_w
-            jt01 = (r01 - x_out * r21) * inv_w
-            jt10 = (r10 - y_out * r20) * inv_w
-            jt11 = (r11 - y_out * r21) * inv_w
+            jt00 = (t00 - x_out * t20) * inv_w
+            jt01 = (t01 - x_out * t21) * inv_w
+            jt10 = (t10 - y_out * t20) * inv_w
+            jt11 = (t11 - y_out * t21) * inv_w
 
             # Chain rule: J_total = J_tilt @ J_12param
             j00 = jt00 * j00_12 + jt01 * j10_12
@@ -321,6 +321,7 @@ def _undistort_points(
     For 14-param: first inverts the tilt transformation, then undistorts the 12-param.
     """
     k0, k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11 = d[:12]
+    _0 = np.float32(0)
     _1 = np.float32(1)
     _2 = np.float32(2)
     k3_p_k8 = k3 + k8
@@ -329,20 +330,23 @@ def _undistort_points(
     _2_k3 = _2 * k3
 
     # Check for tilt parameters
-    tau_x = d[12] if len(d) > 12 else np.float32(0)
-    tau_y = d[13] if len(d) > 13 else np.float32(0)
+    tau_x = d[12] if len(d) > 12 else _0
+    tau_y = d[13] if len(d) > 13 else _0
     has_tilt = tau_x != 0.0 or tau_y != 0.0
 
-    # Precompute inverse tilt rotation if needed
-    # R_inv = Rx^T @ Ry^T where Rx^T and Ry^T are transposes
+    # Precompute inverse tilt matrix if needed
+    # OpenCV: invMatTilt = matRotXY.T @ invMatProjZ
     if has_tilt:
         cx = np.cos(tau_x)
         sx = np.sin(tau_x)
         cy = np.cos(tau_y)
         sy = np.sin(tau_y)
-        ri00, ri01, ri02 = cy, np.float32(0), -sy
-        ri10, ri11, ri12 = sx * sy, cx, sx * cy
-        ri20, ri21, ri22 = cx * sy, -sx, cx * cy
+        inv_cx = _1 / cx
+        inv_cy = _1 / cy
+        inv_cxcy = inv_cx * inv_cy
+        ti00, ti01, ti02 = inv_cx, _0, _0
+        ti10, ti11, ti12 = sy * sx * inv_cxcy, inv_cy, _0
+        ti20, ti21, ti22 = -sy * inv_cy, sx * inv_cxcy, inv_cxcy
 
     (ru_valid, tu_valid), (rd_valid, td_valid) = polar_ud_valid
     ru2_valid_min = np.square(np.min(ru_valid))
@@ -354,9 +358,9 @@ def _undistort_points(
         pn_untilted = np.empty_like(pn)
         for i in range(pn.shape[0]):
             pnx, pny = pn[i, 0], pn[i, 1]
-            w = ri20 * pnx + ri21 * pny + ri22
-            pn_untilted[i, 0] = (ri00 * pnx + ri01 * pny + ri02) / w
-            pn_untilted[i, 1] = (ri10 * pnx + ri11 * pny + ri12) / w
+            w = ti20 * pnx + ti21 * pny + ti22
+            pn_untilted[i, 0] = (ti00 * pnx + ti01 * pny + ti02) / w
+            pn_untilted[i, 1] = (ti10 * pnx + ti11 * pny + ti12) / w
         pn_for_undistort = pn_untilted
     else:
         pn_for_undistort = pn

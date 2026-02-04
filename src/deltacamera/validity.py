@@ -1,4 +1,5 @@
 import functools
+import warnings
 from typing import TYPE_CHECKING
 
 from . import core, coordframes, distortion, reprojection, util
@@ -12,6 +13,36 @@ from shapely.geometry import GeometryCollection, MultiPolygon, Polygon
 
 if TYPE_CHECKING:
     from deltacamera import Camera
+
+
+def _resolve_imshape(imshape, camera, param_name="imshape"):
+    """Resolve image shape from parameter or camera.image_shape.
+
+    Emits deprecation warning if explicit parameter is provided.
+    Returns None if neither is available (for functions that can return unbounded).
+    """
+    if imshape is not None:
+        warnings.warn(
+            f"{param_name} parameter is deprecated. Set camera.image_shape instead.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        return imshape
+    return camera.image_shape  # May be None
+
+
+def _resolve_imshape_required(imshape, camera, param_name="imshape"):
+    """Resolve image shape from parameter or camera.image_shape (required).
+
+    Emits deprecation warning if explicit parameter is provided.
+    Raises ValueError if neither is available.
+    """
+    result = _resolve_imshape(imshape, camera, param_name)
+    if result is None:
+        raise ValueError(
+            f"Image shape required. Either pass {param_name} or set camera.image_shape."
+        )
+    return result
 
 
 # =============================================================================
@@ -88,7 +119,7 @@ def get_valid_distortion_region(
 def get_valid_distortion_region_fisheye(
     camera: "Camera", n_vertices: int = 128, cartesian: bool = True
 ):
-    ru, rd = fisheye_valid_r_max_cached(camera.distortion_coeffs)
+    ru, rd = fisheye_valid_r_max_cached(camera._distortion_model.coeffs)
     t = np.linspace(-np.pi, np.pi, n_vertices)[:-1]
     if cartesian:
         return polar_to_cartesian_same_radius(ru, t), polar_to_cartesian_same_radius(rd, t)
@@ -635,9 +666,21 @@ def clean_up_polygon(geom):
 
 
 def get_valid_poly(camera: "Camera", imshape=None):
+    """Get the valid region polygon for a camera with potential distortion.
+
+    Args:
+        camera: Camera with potential lens distortion.
+        imshape: DEPRECATED. Image shape (height, width). Use camera.image_shape instead.
+
+    Returns:
+        Shapely polygon representing the valid region. If imshape/camera.image_shape
+        is None, returns an unbounded polygon.
+    """
+    effective_imshape = _resolve_imshape(imshape, camera)
+
     if not camera.has_distortion():
-        if imshape is not None:
-            return shapely.box(0, 0, imshape[1], imshape[0])
+        if effective_imshape is not None:
+            return shapely.box(0, 0, effective_imshape[1], effective_imshape[0])
 
         su_box = shapely.box(-500, 500, 500, -500)
         return shape_transform(camera.camera_to_image, su_box)
@@ -658,43 +701,61 @@ def get_valid_poly(camera: "Camera", imshape=None):
         )
 
         s_valid = shapely.Polygon(p_valid[:-1])
-        if imshape is None:
+        if effective_imshape is None:
             return clean_up_polygon(shapely.make_valid(s_valid))
 
-        s_box = shapely.box(0, 0, imshape[1], imshape[0])
+        s_box = shapely.box(0, 0, effective_imshape[1], effective_imshape[0])
         s_inters = s_box & shapely.make_valid(s_valid)
         return clean_up_polygon(s_inters)
 
     else:
-        ru_valid, rd_valid = fisheye_valid_r_max_cached(camera.distortion_coeffs)
+        ru_valid, rd_valid = fisheye_valid_r_max_cached(camera._distortion_model.coeffs)
         sn_valid = shapely.Point(0, 0).buffer(rd_valid, resolution=16)
         s_valid = shape_apply_intrinsics(camera, sn_valid)
-        if imshape is None:
+        if effective_imshape is None:
             return clean_up_polygon(s_valid)
 
-        s_box = shapely.box(0, 0, imshape[1], imshape[0])
+        s_box = shapely.box(0, 0, effective_imshape[1], effective_imshape[0])
         s_inters = s_box & shapely.make_valid(s_valid)
         return clean_up_polygon(s_inters)
 
 
 def get_valid_poly_reproj(old_camera, new_camera, imshape_old=None, imshape_new=None):
+    """Get the valid region polygon when reprojecting between cameras.
+
+    Args:
+        old_camera: Source camera.
+        new_camera: Target camera.
+        imshape_old: DEPRECATED. Shape of old camera's image (height, width).
+                     Use old_camera.image_shape instead.
+        imshape_new: DEPRECATED. Shape of new camera's image (height, width).
+                     Use new_camera.image_shape instead.
+
+    Returns:
+        Shapely polygon representing the valid region in new camera's image space.
+    """
+    effective_imshape_old = _resolve_imshape(imshape_old, old_camera, "imshape_old")
+    effective_imshape_new = _resolve_imshape(imshape_new, new_camera, "imshape_new")
+
     near_z = np.float32(1e-3)
     far_z = np.float32(1e6)
 
-    if np.allclose(new_camera.R, old_camera.R) and util.allclose_or_nones(
-        new_camera.distortion_coeffs, old_camera.distortion_coeffs
+    if np.allclose(new_camera.R, old_camera.R) and (
+        new_camera._distortion_model == old_camera._distortion_model
     ):
-        return get_valid_poly_reproj_affine(old_camera, new_camera, imshape_old, imshape_new)
+        return get_valid_poly_reproj_affine(
+            old_camera, new_camera, effective_imshape_old, effective_imshape_new
+        )
 
     if old_camera.has_distortion():
         pu_old_of_old, pn_old_of_old = get_valid_distortion_region(old_camera)
 
-        if imshape_old is not None:
+        if effective_imshape_old is not None:
             # su_old_of_old = shapely.Polygon(pu_old_of_old)
             sn_old_of_old = shapely.Polygon(pn_old_of_old)
             s_old_of_old = shape_apply_intrinsics(old_camera, sn_old_of_old)
             f = old_camera.intrinsic_matrix[0, 0]
-            s_old_of_old_box = shapely.box(0, 0, imshape_old[1], imshape_old[0])
+            s_old_of_old_box = shapely.box(0, 0, effective_imshape_old[1], effective_imshape_old[0])
             s_old_of_old = s_old_of_old_box & shapely.make_valid(s_old_of_old)
             s_old_of_old = shapely.segmentize(s_old_of_old, max_segment_length=0.05 * f)
             su_old_of_old = shape_image_to_undistorted(old_camera, s_old_of_old)
@@ -709,8 +770,8 @@ def get_valid_poly_reproj(old_camera, new_camera, imshape_old=None, imshape_new=
             pu_new_of_old = pu_new_of_old_hom[:, :2] / pu_new_of_old_hom[:, 2:]
             su_new_of_old = shapely.Polygon(pu_new_of_old)
     else:
-        if imshape_old is not None:
-            h, w = imshape_old
+        if effective_imshape_old is not None:
+            h, w = effective_imshape_old
             p_old_of_old = np.array([[0, 0], [w, 0], [w, h], [0, h]], np.float32)
             pu_old_of_old_hom = old_camera.image_to_camera(p_old_of_old)
         else:
@@ -734,9 +795,9 @@ def get_valid_poly_reproj(old_camera, new_camera, imshape_old=None, imshape_new=
     else:
         s_new_of_inters = shape_undistorted_to_image(new_camera, su_new_of_old)
 
-    if imshape_new is not None:
-        s_new_of_new_box = shapely.box(0, 0, imshape_new[1], imshape_new[0])
-        # s_new_of_inters = shapely.clip_by_rect(s_new_of_inters, 0, 0, imshape_new[1], imshape_new[0])
+    if effective_imshape_new is not None:
+        s_new_of_new_box = shapely.box(0, 0, effective_imshape_new[1], effective_imshape_new[0])
+        # s_new_of_inters = shapely.clip_by_rect(s_new_of_inters, 0, 0, effective_imshape_new[1], effective_imshape_new[0])
         # s_new_of_inters = shapely.make_valid(s_new_of_inters)
         if new_camera.has_distortion() or old_camera.has_distortion():
             s_new_of_inters = shapely.make_valid(s_new_of_inters)
@@ -749,18 +810,29 @@ def get_valid_poly_reproj(old_camera, new_camera, imshape_old=None, imshape_new=
 
 
 def get_valid_poly_reproj_affine(old_camera, new_camera, imshape_old=None, imshape_new=None):
+    """Get valid region polygon for affine reprojection (same rotation + distortion).
+
+    Note: This is typically called from get_valid_poly_reproj when rotation and
+    distortion are the same. If called directly with explicit imshape parameters,
+    a deprecation warning will be issued.
+    """
+    # Note: This function may be called internally with already-resolved shapes,
+    # or directly by user with deprecated parameters. Handle both cases.
+    effective_imshape_old = _resolve_imshape(imshape_old, old_camera, "imshape_old")
+    effective_imshape_new = _resolve_imshape(imshape_new, new_camera, "imshape_new")
+
     if old_camera.has_distortion():
         _, pn = get_valid_distortion_region(old_camera)
         sn = shapely.Polygon(pn)
         s_old_of_old = shape_apply_intrinsics(old_camera, sn)
 
-        if imshape_old is not None:
-            s_old_of_old_box = shapely.box(0, 0, imshape_old[1], imshape_old[0])
+        if effective_imshape_old is not None:
+            s_old_of_old_box = shapely.box(0, 0, effective_imshape_old[1], effective_imshape_old[0])
             s_old_of_old = s_old_of_old_box & shapely.make_valid(s_old_of_old)
 
         s_new_of_new = shape_apply_intrinsics(new_camera, sn)
-        if imshape_new is not None:
-            s_new_of_new_box = shapely.box(0, 0, imshape_new[1], imshape_new[0])
+        if effective_imshape_new is not None:
+            s_new_of_new_box = shapely.box(0, 0, effective_imshape_new[1], effective_imshape_new[0])
             s_new_of_new = s_new_of_new_box & shapely.make_valid(s_new_of_new)
 
         s_new_of_old = shape_transform(
@@ -771,21 +843,21 @@ def get_valid_poly_reproj_affine(old_camera, new_camera, imshape_old=None, imsha
         )
         s_new_of_inters = s_new_of_new & shapely.make_valid(s_new_of_old)
     else:
-        if imshape_old is not None:
-            s_old_of_old = shapely.box(0, 0, imshape_old[1], imshape_old[0])
+        if effective_imshape_old is not None:
+            s_old_of_old = shapely.box(0, 0, effective_imshape_old[1], effective_imshape_old[0])
             s_new_of_old = shape_transform(
                 lambda x: coordframes.reproject_intrinsics(
                     x, old_camera.intrinsic_matrix, new_camera.intrinsic_matrix
                 ),
                 s_old_of_old,
             )
-            if imshape_new is not None:
-                s_new_of_new = shapely.box(0, 0, imshape_new[1], imshape_new[0])
+            if effective_imshape_new is not None:
+                s_new_of_new = shapely.box(0, 0, effective_imshape_new[1], effective_imshape_new[0])
                 s_new_of_inters = s_new_of_new & s_new_of_old
             else:
                 s_new_of_inters = s_new_of_old
-        elif imshape_new is not None:
-            s_new_of_new = shapely.box(0, 0, imshape_new[1], imshape_new[0])
+        elif effective_imshape_new is not None:
+            s_new_of_new = shapely.box(0, 0, effective_imshape_new[1], effective_imshape_new[0])
             s_new_of_inters = s_new_of_new
         else:
             bignum = 1e9
@@ -815,7 +887,7 @@ def to_homogeneous(points):
     return np.squeeze(cv2.convertPointsToHomogeneous(points), axis=1)
 
 
-def get_valid_mask(camera, imshape):
+def get_valid_mask(camera, imshape=None):
     """Get the valid region mask for a camera with lens distortion.
 
     The valid region is where the distortion model is well-defined and invertible.
@@ -823,18 +895,20 @@ def get_valid_mask(camera, imshape):
 
     Args:
         camera: Camera with potential lens distortion.
-        imshape: Image shape (height, width).
+        imshape: DEPRECATED. Image shape (height, width). Use camera.image_shape instead.
 
     Returns:
         RLEMask indicating valid pixels.
     """
+    effective_imshape = _resolve_imshape_required(imshape, camera)
+
     if not camera.has_distortion():
-        return RLEMask.ones(imshape[:2])
+        return RLEMask.ones(effective_imshape[:2])
 
-    return shapely_to_rle(get_valid_poly(camera, imshape), imshape)
+    return shapely_to_rle(get_valid_poly(camera), effective_imshape)
 
 
-def get_valid_mask_reproj(old_camera, new_camera, imshape_old, imshape_new):
+def get_valid_mask_reproj(old_camera, new_camera, imshape_old=None, imshape_new=None):
     """Get the valid region mask when reprojecting between two cameras.
 
     The valid region is the intersection of:
@@ -844,14 +918,20 @@ def get_valid_mask_reproj(old_camera, new_camera, imshape_old, imshape_new):
     Args:
         old_camera: Source camera.
         new_camera: Target camera.
-        imshape_old: Shape of old camera's image (height, width), or None.
-        imshape_new: Shape of new camera's image (height, width).
+        imshape_old: DEPRECATED. Shape of old camera's image (height, width), or None.
+                     Use old_camera.image_shape instead.
+        imshape_new: DEPRECATED. Shape of new camera's image (height, width).
+                     Use new_camera.image_shape instead.
 
     Returns:
         RLEMask indicating valid pixels in the new camera's image space.
     """
+    effective_imshape_old = _resolve_imshape(imshape_old, old_camera, "imshape_old")
+    effective_imshape_new = _resolve_imshape_required(imshape_new, new_camera, "imshape_new")
+
     return shapely_to_rle(
-        get_valid_poly_reproj(old_camera, new_camera, imshape_old, imshape_new), imshape_new
+        get_valid_poly_reproj(old_camera, new_camera, effective_imshape_old, effective_imshape_new),
+        effective_imshape_new,
     )
 
 
