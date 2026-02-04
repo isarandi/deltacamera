@@ -272,3 +272,100 @@ class TestDistortionEdgeCases:
         # All points at same radius should distort to same radius
         r_distorted = np.linalg.norm(distorted, axis=1)
         np.testing.assert_allclose(r_distorted, r_distorted[0], rtol=1e-6)
+
+
+# =============================================================================
+# OpenCV oracle tests
+# =============================================================================
+
+class TestDistortionAgainstOpenCV:
+    """Verify distort_points matches OpenCV's projectPoints."""
+
+    @staticmethod
+    def opencv_distort(points_2d, distortion_coeffs):
+        """Apply distortion using OpenCV as oracle.
+
+        Args:
+            points_2d: (N, 2) normalized undistorted points
+            distortion_coeffs: distortion coefficients (5, 8, 12, or 14)
+
+        Returns:
+            (N, 2) distorted normalized points
+        """
+        import cv2
+
+        # Convert 2D normalized coords to 3D at z=1
+        points_3d = np.zeros((len(points_2d), 1, 3), dtype=np.float64)
+        points_3d[:, 0, :2] = points_2d
+        points_3d[:, 0, 2] = 1.0
+
+        # Identity rotation/translation and camera matrix
+        rvec = np.zeros(3, dtype=np.float64)
+        tvec = np.zeros(3, dtype=np.float64)
+        K = np.eye(3, dtype=np.float64)
+
+        # OpenCV expects specific lengths, pad if needed
+        d = np.asarray(distortion_coeffs, dtype=np.float64)
+
+        result, _ = cv2.projectPoints(points_3d, rvec, tvec, K, d)
+        return result[:, 0, :].astype(np.float32)
+
+    @pytest.mark.parametrize("d", BROWN_CONRADY_5_COEFFS)
+    def test_5_param_matches_opencv(self, d):
+        """5-parameter distortion should match OpenCV exactly."""
+        # Sample points in valid region (small radius to avoid extreme distortion)
+        np.random.seed(42)
+        points = (np.random.rand(200, 2).astype(np.float32) - 0.5) * 0.5
+
+        # Our implementation
+        d12 = extend_distortion_coeffs(d, 12)
+        ours = deltacamera.distortion.distort_points(points, d12, check_validity=False)
+
+        # OpenCV oracle
+        opencv = self.opencv_distort(points, d)
+
+        np.testing.assert_allclose(ours, opencv, rtol=1e-5, atol=1e-7)
+
+    @pytest.mark.parametrize("d", BROWN_CONRADY_COEFFS)
+    def test_12_param_matches_opencv(self, d):
+        """12-parameter distortion should match OpenCV."""
+        np.random.seed(42)
+        points = (np.random.rand(200, 2).astype(np.float32) - 0.5) * 0.5
+
+        ours = deltacamera.distortion.distort_points(points, d, check_validity=False)
+        opencv = self.opencv_distort(points, d)
+
+        np.testing.assert_allclose(ours, opencv, rtol=1e-5, atol=1e-7)
+
+    def test_14_param_with_tilt_matches_opencv(self):
+        """14-parameter distortion with tilt should match OpenCV."""
+        np.random.seed(42)
+        points = (np.random.rand(200, 2).astype(np.float32) - 0.5) * 0.4
+
+        # 14-param with nonzero tilt
+        d14 = np.zeros(14, dtype=np.float32)
+        d14[0] = -0.15  # k1
+        d14[1] = 0.05   # k2
+        d14[2] = 0.0003  # p1
+        d14[3] = -0.0002  # p2
+        d14[4] = 0.01   # k3
+        d14[8] = 0.0001  # s1
+        d14[10] = 0.0001  # s3
+        d14[12] = 0.02  # tau_x
+        d14[13] = -0.015  # tau_y
+
+        ours = deltacamera.distortion.distort_points(points, d14, check_validity=False)
+        opencv = self.opencv_distort(points, d14)
+
+        np.testing.assert_allclose(ours, opencv, rtol=1e-5, atol=1e-7)
+
+    def test_origin_unchanged(self):
+        """Origin should map to origin for any distortion."""
+        d = BROWN_CONRADY_COEFFS[0]
+        origin = np.array([[0.0, 0.0]], np.float32)
+
+        ours = deltacamera.distortion.distort_points(origin, d, check_validity=False)
+        opencv = self.opencv_distort(origin, d)
+
+        np.testing.assert_allclose(ours, opencv, atol=1e-10)
+        np.testing.assert_allclose(ours, origin, atol=1e-10)

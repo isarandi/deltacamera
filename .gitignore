@@ -86,4 +86,4 @@ cython_debug/
 .ruff_cache/
 
 # Generated version file (created by setuptools-scm)
-src/cameravision/_version.py
+src/deltacamera/_version.py

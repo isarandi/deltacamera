@@ -204,3 +204,411 @@ class TestCameraEdgeCases:
         result = simple_camera.camera_to_image(behind)
         # Either inf, nan, or very large values are acceptable
         assert np.all(~np.isfinite(result) | (np.abs(result) > 1e6))
+
+
+class TestImageTransforms:
+    """Test image transformation methods with distorted cameras."""
+
+    @pytest.fixture
+    def jrdb_camera(self):
+        """Create camera from JRDB calibration (Brown-Conrady 5-param)."""
+        data = np.load("tests/data/jrdb_calibrations.npz")
+        return deltacamera.Camera(
+            intrinsic_matrix=data["intrinsic_matrices"][0],
+            distortion_coeffs=data["distortion_coeffs"][0],
+            image_shape=(data["resolutions"][0, 1], data["resolutions"][0, 0]),
+        )
+
+    @pytest.fixture
+    def egohumans_camera(self):
+        """Create camera from EgoHumans calibration (fisheye 4-param)."""
+        data = np.load("tests/data/egohumans_fisheye_calibrations.npz")
+        return deltacamera.Camera(
+            intrinsic_matrix=data["intrinsic_matrices"][0],
+            distortion_coeffs=data["distortion_coeffs"][0],
+            image_shape=(data["resolutions"][0, 1], data["resolutions"][0, 0]),
+        )
+
+    def _generate_world_points(self, n=50):
+        """Generate random world points in front of camera."""
+        points = np.random.randn(n, 3).astype(np.float32) * 2
+        points[:, 2] = np.abs(points[:, 2]) + 3  # Ensure z > 0
+        return points
+
+    def _filter_valid_points(self, cam, world_points):
+        """Project points and keep only those with valid image coordinates."""
+        img_pts = cam.world_to_image(world_points)
+        valid = (
+            np.isfinite(img_pts).all(axis=1) &
+            (img_pts[:, 0] >= 0) & (img_pts[:, 0] < cam.image_shape[1]) &
+            (img_pts[:, 1] >= 0) & (img_pts[:, 1] < cam.image_shape[0])
+        )
+        return world_points[valid], img_pts[valid]
+
+    # -------------------------------------------------------------------------
+    # Horizontal flip tests
+    # -------------------------------------------------------------------------
+
+    def test_hflip_jrdb(self, jrdb_camera):
+        """Test image_hflipped with JRDB Brown-Conrady camera."""
+        world_pts, orig_img_pts = self._filter_valid_points(
+            jrdb_camera, self._generate_world_points(100)
+        )
+        assert len(world_pts) > 10, "Need enough valid points"
+
+        flipped_cam = jrdb_camera.image_hflipped()
+        flipped_img_pts = flipped_cam.world_to_image(world_pts)
+
+        # After hflip: x' = width - 1 - x, y' = y
+        width = jrdb_camera.image_shape[1]
+        expected_x = width - 1 - orig_img_pts[:, 0]
+
+        np.testing.assert_allclose(flipped_img_pts[:, 0], expected_x, rtol=1e-4, atol=0.5)
+        np.testing.assert_allclose(flipped_img_pts[:, 1], orig_img_pts[:, 1], rtol=1e-4, atol=0.5)
+
+    def test_hflip_egohumans(self, egohumans_camera):
+        """Test image_hflipped with EgoHumans fisheye camera."""
+        world_pts, orig_img_pts = self._filter_valid_points(
+            egohumans_camera, self._generate_world_points(100)
+        )
+        assert len(world_pts) > 10, "Need enough valid points"
+
+        flipped_cam = egohumans_camera.image_hflipped()
+        flipped_img_pts = flipped_cam.world_to_image(world_pts)
+
+        # After hflip: x' = width - 1 - x, y' = y
+        width = egohumans_camera.image_shape[1]
+        expected_x = width - 1 - orig_img_pts[:, 0]
+
+        np.testing.assert_allclose(flipped_img_pts[:, 0], expected_x, rtol=1e-4, atol=0.5)
+        np.testing.assert_allclose(flipped_img_pts[:, 1], orig_img_pts[:, 1], rtol=1e-4, atol=0.5)
+
+    # -------------------------------------------------------------------------
+    # Rot90 tests
+    # -------------------------------------------------------------------------
+
+    def test_rot90_jrdb(self, jrdb_camera):
+        """Test image_rot90 with JRDB Brown-Conrady camera."""
+        world_pts, orig_img_pts = self._filter_valid_points(
+            jrdb_camera, self._generate_world_points(100)
+        )
+        assert len(world_pts) > 10, "Need enough valid points"
+
+        rotated_cam = jrdb_camera.image_rot90(k=1)
+        rotated_img_pts = rotated_cam.world_to_image(world_pts)
+
+        # After rot90 k=1: (x, y) -> (H - 1 - y, x) where H is original height
+        height = jrdb_camera.image_shape[0]
+        expected_x = height - 1 - orig_img_pts[:, 1]
+        expected_y = orig_img_pts[:, 0]
+
+        np.testing.assert_allclose(rotated_img_pts[:, 0], expected_x, rtol=1e-4, atol=0.5)
+        np.testing.assert_allclose(rotated_img_pts[:, 1], expected_y, rtol=1e-4, atol=0.5)
+
+    def test_rot90_egohumans(self, egohumans_camera):
+        """Test image_rot90 with EgoHumans fisheye camera."""
+        world_pts, orig_img_pts = self._filter_valid_points(
+            egohumans_camera, self._generate_world_points(100)
+        )
+        assert len(world_pts) > 10, "Need enough valid points"
+
+        rotated_cam = egohumans_camera.image_rot90(k=1)
+        rotated_img_pts = rotated_cam.world_to_image(world_pts)
+
+        # After rot90 k=1: (x, y) -> (H - 1 - y, x) where H is original height
+        height = egohumans_camera.image_shape[0]
+        expected_x = height - 1 - orig_img_pts[:, 1]
+        expected_y = orig_img_pts[:, 0]
+
+        np.testing.assert_allclose(rotated_img_pts[:, 0], expected_x, rtol=1e-4, atol=0.5)
+        np.testing.assert_allclose(rotated_img_pts[:, 1], expected_y, rtol=1e-4, atol=0.5)
+
+    def test_rot90_roundtrip(self, jrdb_camera):
+        """Test that 4 rot90 operations return to original."""
+        world_pts, orig_img_pts = self._filter_valid_points(
+            jrdb_camera, self._generate_world_points(50)
+        )
+        assert len(world_pts) > 5
+
+        cam4 = jrdb_camera.image_rot90(k=4)
+        img_pts_4 = cam4.world_to_image(world_pts)
+
+        np.testing.assert_allclose(img_pts_4, orig_img_pts, rtol=1e-4, atol=0.5)
+
+    # -------------------------------------------------------------------------
+    # Rotated (arbitrary angle) tests
+    # -------------------------------------------------------------------------
+
+    def test_rotated_jrdb(self, jrdb_camera):
+        """Test image_rotated with JRDB Brown-Conrady camera."""
+        world_pts, orig_img_pts = self._filter_valid_points(
+            jrdb_camera, self._generate_world_points(100)
+        )
+        assert len(world_pts) > 10, "Need enough valid points"
+
+        angle = np.pi / 6  # 30 degrees
+        rotated_cam = jrdb_camera.image_rotated(angle)
+        rotated_img_pts = rotated_cam.world_to_image(world_pts)
+
+        # Compute expected coords by rotating around image center
+        h, w = jrdb_camera.image_shape
+        center = np.array([(w - 1) / 2, (h - 1) / 2], dtype=np.float32)
+        cos, sin = np.cos(angle), np.sin(angle)
+        R = np.array([[cos, -sin], [sin, cos]], dtype=np.float32)
+
+        centered = orig_img_pts - center
+        expected = (R @ centered.T).T + center
+
+        np.testing.assert_allclose(rotated_img_pts, expected, rtol=1e-4, atol=0.5)
+
+    def test_rotated_egohumans(self, egohumans_camera):
+        """Test image_rotated with EgoHumans fisheye camera."""
+        world_pts, orig_img_pts = self._filter_valid_points(
+            egohumans_camera, self._generate_world_points(100)
+        )
+        assert len(world_pts) > 10, "Need enough valid points"
+
+        angle = -np.pi / 4  # -45 degrees
+        rotated_cam = egohumans_camera.image_rotated(angle)
+        rotated_img_pts = rotated_cam.world_to_image(world_pts)
+
+        # Compute expected coords by rotating around image center
+        h, w = egohumans_camera.image_shape
+        center = np.array([(w - 1) / 2, (h - 1) / 2], dtype=np.float32)
+        cos, sin = np.cos(angle), np.sin(angle)
+        R = np.array([[cos, -sin], [sin, cos]], dtype=np.float32)
+
+        centered = orig_img_pts - center
+        expected = (R @ centered.T).T + center
+
+        np.testing.assert_allclose(rotated_img_pts, expected, rtol=1e-4, atol=0.5)
+
+    def test_rotated_roundtrip(self, jrdb_camera):
+        """Test that rotating by 2*pi returns to original."""
+        world_pts, orig_img_pts = self._filter_valid_points(
+            jrdb_camera, self._generate_world_points(50)
+        )
+        assert len(world_pts) > 5
+
+        rotated_cam = jrdb_camera.image_rotated(2 * np.pi)
+        rotated_img_pts = rotated_cam.world_to_image(world_pts)
+
+        np.testing.assert_allclose(rotated_img_pts, orig_img_pts, rtol=1e-4, atol=0.5)
+
+    # -------------------------------------------------------------------------
+    # Image reprojection tests (pixel-level verification)
+    # -------------------------------------------------------------------------
+
+    @pytest.fixture
+    def weak_distortion_14param(self):
+        """Camera with weak 14-param distortion for image reprojection tests.
+
+        Uses weaker distortion than real cameras to ensure the valid region
+        covers most of the image after transformations like hflip and rot90.
+        """
+        d14 = np.zeros(14, dtype=np.float32)
+        np.random.seed(42)
+        d14[0] = -0.05    # k1 (weak radial)
+        d14[1] = 0.01     # k2
+        d14[2:4] = np.random.randn(2) * 0.0001  # p1, p2 (weak tangential)
+        d14[4] = 0.001    # k3
+        d14[5:8] = np.random.randn(3) * 0.0001  # k4, k5, k6
+        d14[8:12] = np.random.randn(4) * 0.00005  # s1, s2, s3, s4
+        d14[12:14] = np.random.randn(2) * 0.005   # tau_x, tau_y (weak tilt)
+        return deltacamera.Camera(
+            intrinsic_matrix=[[500, 0, 320], [0, 500, 240], [0, 0, 1]],
+            distortion_coeffs=d14,
+            image_shape=(480, 640),
+        )
+
+    @pytest.fixture
+    def generic_camera(self):
+        """Camera with skew, non-equal focal lengths, and 14-param distortion.
+
+        This is the most general Brown-Conrady camera configuration to test
+        that all transformation code handles the full parameter space.
+        """
+        d14 = np.zeros(14, dtype=np.float32)
+        np.random.seed(123)
+        d14[0] = -0.08    # k1
+        d14[1] = 0.02     # k2
+        d14[2:4] = np.random.randn(2) * 0.0002  # p1, p2
+        d14[4] = 0.005    # k3
+        d14[5:8] = np.random.randn(3) * 0.0002  # k4, k5, k6
+        d14[8:12] = np.random.randn(4) * 0.0001  # s1, s2, s3, s4
+        d14[12:14] = np.random.randn(2) * 0.02   # tau_x, tau_y
+        return deltacamera.Camera(
+            intrinsic_matrix=[[520, 2.5, 325], [0, 480, 242], [0, 0, 1]],
+            distortion_coeffs=d14,
+            image_shape=(480, 640),
+        )
+
+    def _get_test_image(self, shape):
+        """Get astronaut image resized to target shape."""
+        from skimage.data import astronaut
+        from skimage.transform import resize
+        img = astronaut()
+        return (resize(img, shape[:2], anti_aliasing=True) * 255).astype(np.uint8)
+
+    def _scaled_camera(self, cam, scale):
+        """Return a scaled copy of the camera."""
+        c = cam.copy()
+        c.scale_output(scale)
+        return c
+
+    def test_hflip_image_14param(self, weak_distortion_14param):
+        """Test image_hflipped reprojection matches np.fliplr (14-param)."""
+        from deltacamera import reproject_image
+
+        cam = weak_distortion_14param
+        img = self._get_test_image(cam.image_shape)
+
+        flipped_cam = cam.image_hflipped()
+        reprojected = reproject_image(img, cam, flipped_cam)
+        expected = np.fliplr(img)
+
+        margin = 10
+        diff = np.abs(reprojected[margin:-margin, margin:-margin].astype(float) -
+                      expected[margin:-margin, margin:-margin].astype(float))
+        assert np.mean(diff) < 2.0, f"Mean pixel diff {np.mean(diff):.2f} > 2.0"
+
+    def test_hflip_image_fisheye(self, egohumans_camera):
+        """Test image_hflipped reprojection matches np.fliplr (fisheye)."""
+        from deltacamera import reproject_image
+
+        cam = self._scaled_camera(egohumans_camera, 0.1)
+        img = self._get_test_image(cam.image_shape)
+
+        flipped_cam = cam.image_hflipped()
+        reprojected = reproject_image(img, cam, flipped_cam)
+        expected = np.fliplr(img)
+
+        margin = 10
+        diff = np.abs(reprojected[margin:-margin, margin:-margin].astype(float) -
+                      expected[margin:-margin, margin:-margin].astype(float))
+        # Higher threshold for fisheye due to stronger distortion causing more interpolation error
+        assert np.mean(diff) < 5.0, f"Mean pixel diff {np.mean(diff):.2f} > 5.0"
+
+    def test_rot90_image_14param(self, weak_distortion_14param):
+        """Test image_rot90 reprojection matches np.rot90 (14-param)."""
+        from deltacamera import reproject_image
+
+        cam = weak_distortion_14param
+        img = self._get_test_image(cam.image_shape)
+
+        rotated_cam = cam.image_rot90(k=1)
+        reprojected = reproject_image(img, cam, rotated_cam)
+        # image_rot90(k=1) does CW rotation, np.rot90(k=-1) is also CW
+        expected = np.rot90(img, k=-1)
+
+        margin = 10
+        diff = np.abs(reprojected[margin:-margin, margin:-margin].astype(float) -
+                      expected[margin:-margin, margin:-margin].astype(float))
+        assert np.mean(diff) < 2.0, f"Mean pixel diff {np.mean(diff):.2f} > 2.0"
+
+    def test_rot90_image_fisheye(self, egohumans_camera):
+        """Test image_rot90 reprojection matches np.rot90 (fisheye)."""
+        from deltacamera import reproject_image
+
+        cam = self._scaled_camera(egohumans_camera, 0.1)
+        img = self._get_test_image(cam.image_shape)
+
+        rotated_cam = cam.image_rot90(k=1)
+        reprojected = reproject_image(img, cam, rotated_cam)
+        expected = np.rot90(img, k=-1)
+
+        margin = 10
+        diff = np.abs(reprojected[margin:-margin, margin:-margin].astype(float) -
+                      expected[margin:-margin, margin:-margin].astype(float))
+        # Higher threshold for fisheye due to stronger distortion causing more interpolation error
+        assert np.mean(diff) < 5.0, f"Mean pixel diff {np.mean(diff):.2f} > 5.0"
+
+    # -------------------------------------------------------------------------
+    # Generic camera tests (skew + non-equal focals + 14-param distortion)
+    # -------------------------------------------------------------------------
+
+    def test_hflip_generic(self, generic_camera):
+        """Test image_hflipped with generic camera (skew, fx != fy, 14-param)."""
+        world_pts, orig_img_pts = self._filter_valid_points(
+            generic_camera, self._generate_world_points(100)
+        )
+        assert len(world_pts) > 10, "Need enough valid points"
+
+        flipped_cam = generic_camera.image_hflipped()
+        flipped_img_pts = flipped_cam.world_to_image(world_pts)
+
+        width = generic_camera.image_shape[1]
+        expected_x = width - 1 - orig_img_pts[:, 0]
+
+        np.testing.assert_allclose(flipped_img_pts[:, 0], expected_x, rtol=1e-4, atol=0.5)
+        np.testing.assert_allclose(flipped_img_pts[:, 1], orig_img_pts[:, 1], rtol=1e-4, atol=0.5)
+
+    def test_rot90_generic(self, generic_camera):
+        """Test image_rot90 with generic camera (skew, fx != fy, 14-param)."""
+        world_pts, orig_img_pts = self._filter_valid_points(
+            generic_camera, self._generate_world_points(100)
+        )
+        assert len(world_pts) > 10, "Need enough valid points"
+
+        rotated_cam = generic_camera.image_rot90(k=1)
+        rotated_img_pts = rotated_cam.world_to_image(world_pts)
+
+        height = generic_camera.image_shape[0]
+        expected_x = height - 1 - orig_img_pts[:, 1]
+        expected_y = orig_img_pts[:, 0]
+
+        np.testing.assert_allclose(rotated_img_pts[:, 0], expected_x, rtol=1e-4, atol=0.5)
+        np.testing.assert_allclose(rotated_img_pts[:, 1], expected_y, rtol=1e-4, atol=0.5)
+
+    def test_rotated_generic(self, generic_camera):
+        """Test image_rotated with generic camera (skew, fx != fy, 14-param)."""
+        world_pts, orig_img_pts = self._filter_valid_points(
+            generic_camera, self._generate_world_points(100)
+        )
+        assert len(world_pts) > 10, "Need enough valid points"
+
+        angle = np.pi / 5  # 36 degrees (non-90-multiple to test skew handling)
+        rotated_cam = generic_camera.image_rotated(angle)
+        rotated_img_pts = rotated_cam.world_to_image(world_pts)
+
+        h, w = generic_camera.image_shape
+        center = np.array([(w - 1) / 2, (h - 1) / 2], dtype=np.float32)
+        cos, sin = np.cos(angle), np.sin(angle)
+        R = np.array([[cos, -sin], [sin, cos]], dtype=np.float32)
+
+        centered = orig_img_pts - center
+        expected = (R @ centered.T).T + center
+
+        np.testing.assert_allclose(rotated_img_pts, expected, rtol=1e-4, atol=0.5)
+
+    def test_hflip_image_generic(self, generic_camera):
+        """Test image_hflipped reprojection matches np.fliplr (generic camera)."""
+        from deltacamera import reproject_image
+
+        cam = generic_camera
+        img = self._get_test_image(cam.image_shape)
+
+        flipped_cam = cam.image_hflipped()
+        reprojected = reproject_image(img, cam, flipped_cam)
+        expected = np.fliplr(img)
+
+        margin = 15
+        diff = np.abs(reprojected[margin:-margin, margin:-margin].astype(float) -
+                      expected[margin:-margin, margin:-margin].astype(float))
+        assert np.mean(diff) < 3.0, f"Mean pixel diff {np.mean(diff):.2f} > 3.0"
+
+    def test_rot90_image_generic(self, generic_camera):
+        """Test image_rot90 reprojection matches np.rot90 (generic camera)."""
+        from deltacamera import reproject_image
+
+        cam = generic_camera
+        img = self._get_test_image(cam.image_shape)
+
+        rotated_cam = cam.image_rot90(k=1)
+        reprojected = reproject_image(img, cam, rotated_cam)
+        expected = np.rot90(img, k=-1)
+
+        margin = 15
+        diff = np.abs(reprojected[margin:-margin, margin:-margin].astype(float) -
+                      expected[margin:-margin, margin:-margin].astype(float))
+        assert np.mean(diff) < 3.0, f"Mean pixel diff {np.mean(diff):.2f} > 3.0"

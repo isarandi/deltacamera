@@ -100,8 +100,8 @@ class TestImageReprojection:
         """Output should have correct shape."""
         image = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
 
-        camera2 = simple_camera.copy()
-        camera2.intrinsic_matrix[0, 2] = 400  # Different principal point
+        # Use immutable API: shift principal point by (80, 0) to move from 320 to 400
+        camera2 = simple_camera.image_shifted([80, 0])
 
         reprojected = deltacamera.reprojection.reproject_image(
             image, simple_camera, camera2, output_imshape=(600, 800)
