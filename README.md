@@ -31,8 +31,3 @@ python -m deltacamera.precompile
 ## Documentation
 
 Full documentation is available at [deltacamera.readthedocs.io](https://deltacamera.readthedocs.io).
-
-## References
-
-For the idea of computing the valid image region after distortion, see the following reference. We extend this idea to the full 14-parameter extended Brown-Conrady distortion model and the Kannala-Brandt fisheye model.
-- Matthew J. Leotta, David Russell, Andrew Matrai, "On the Maximum Radius of Polynomial Lens Distortion", WACV 2022.
