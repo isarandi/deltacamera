@@ -1,6 +1,6 @@
 # DeltaCamera
 
-This library is about camera models, coordinate transformations, and image warping/undistortion to account for changing camera parameters and lens distortion.
+This is a computer vision / image processing library for changing camera calibration models, coordinate transformations, and image warping/undistortion to account for camera modifications and lens distortion.
 
 ## Main use cases
 
@@ -34,5 +34,5 @@ Full documentation is available at [deltacamera.readthedocs.io](https://deltacam
 
 ## References
 
-For the idea of computing the valid image region after distortion, see:
+For the idea of computing the valid image region after distortion, see the following reference. We extend this idea to the full 14-parameter extended Brown-Conrady distortion model and the Kannala-Brandt fisheye model.
 - Matthew J. Leotta, David Russell, Andrew Matrai, "On the Maximum Radius of Polynomial Lens Distortion", WACV 2022.
