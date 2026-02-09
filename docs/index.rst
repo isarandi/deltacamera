@@ -10,10 +10,10 @@ Features
 --------
 
 - **Coordinate transformations** between world, camera, and image space with lens distortion
-- **Camera manipulation** with intuitive methods: ``zoom``, ``rotate``, ``scale_output``, ``turn_towards``
+- **Camera manipulation** with intuitive methods: ``zoomed``, ``rotated``, ``image_resized``, ``turned_towards``
 - **Accurate distortion inversion** using Newton's method (more accurate than OpenCV)
 - **Valid region tracking** after distortion, extending Leotta et al. to full Brown-Conrady and fisheye models
-- **Fast image warping** with antialiasing, linear sRGB interpolation, and map caching
+- **Fast image warping** with antialiasing, linear RGB interpolation, and map caching
 
 Quick Start
 -----------
@@ -41,12 +41,12 @@ Basic Usage
    # Transform 3D world points to 2D image coordinates
    image_points = cam.world_to_image([[1, 2, 3], [4, 5, 6]])
 
-   # Manipulate the camera (in-place by default)
-   cam.zoom(2.0)
-   cam.rotate(axis=[0, 1, 0], angle=0.1)
+   # Manipulate the camera (returns a new camera)
+   cam2 = cam.zoomed(2.0)
+   cam3 = cam2.rotated(pitch=0.1)
 
-   # Or get a new camera with inplace=False
-   undistorted_cam = cam.undistort(inplace=False)
+   # Remove lens distortion
+   undistorted_cam = cam.undistorted()
 
 .. toctree::
    :maxdepth: 2
