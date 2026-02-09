@@ -1,14 +1,20 @@
-# Deltacamera
+# DeltaCamera
 
-Represent, manipulate and use camera calibration info in computer vision tasks.
+This library is about camera models, coordinate transformations, and image warping/undistortion to account for changing camera parameters and lens distortion.
 
-Main features:
+## Main use cases
 
-- The library supports **converting coordinates** between world, camera and image space, handing **lens distortion** models according to the Brown–Conrady and Kannala–Brandt models.
-- Modify cameras with intuitive methods such as `camera.zoom`, `camera.rotate`, `camera.scale_output`, `camera.turn_towards`, etc.
-- Conversion between distorted and undistorted image spaces are also implemented in an efficient way using Numba and **a more accurate inversion of Brown–Conrady distortion** compared to OpenCV. We use Newton's method in addition to the standard fixed-point iteration. This library can also keep track of valid image regions after warping, inspired by [Leotta et al.](https://openaccess.thecvf.com/content/WACV2022/papers/Leotta_On_the_Maximum_Radius_of_Polynomial_Lens_Distortion_WACV_2022_paper.pdf), but extended to the full Brown-Conrady and Kannala-Brandt models.
+- **Convert coordinates** between world, camera and image space, handing lens distortion models according to the 14-parameter extended Brown–Conrady and the 4-parameter Kannala–Brandt fisheye models.
+- **Reproject** image points and entire images between different camera calibration settings (e.g., rotate the camera or change lens distortion).
+- Modify cameras with **intuitive methods** such as `camera.zoomed`, `camera.rotated`, `camera.image_resized`, `camera.turned_towards`, etc.
 
-- This library also includes efficient implementations of **image warping**, with antialiasing support and interpolation in linear RGB color space. The warping maps can be cached for very fast repeated use (e.g., warp/undistort a video taken from a static camera to another calibration setup). This also supports partial caching of only the more expensive distortion part. This is useful when the rotation can change during a video, but the distortion parameters are fixed (e.g., turning the camera to keep the subject centered).
+## Benefits
+
+- **Speed:** The critical functions are accelerated with Numba and intermediate computations are cached for high performance.
+- **Accuracy:** We use a more accurate inversion of Brown–Conrady compared to OpenCV. OpenCV uses only fixed-point iteration, we use Newton's method in addition to that.
+- **Tracking of pixel validity:** When warping images, we keep track of which pixels in the output image are valid (i.e., map to valid pixels in the input image), taking into account also the valid region of the lens distortion model (outside of which distortion folds back on itself, and would cause artifacts if not detected). The valid region can be obtained as a Shapely polygon, an RLEMaskLib mask or as NaNs in the return values. This feature is missing from OpenCV.
+- **Linear color interpolation:** When warping images, we use linear interpolation in linear color space (gamma corrected), which avoids artifacts when warping images with strong contrast.
+- **Anti-aliasing:** When warping images, we use supersampling to avoid aliasing artifacts when downsampling parts of the image.
 
 ## Installation
 
