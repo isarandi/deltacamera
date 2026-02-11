@@ -1,10 +1,10 @@
 Valid Distortion Regions
 ========================
 
-Lens distortion models are polynomials fitted to calibration data. Within the
+Lens distortion models are simple functions fitted to calibration data. Within the
 calibration region, they accurately describe how light rays bend through the
-lens. But outside that region, the polynomials can behave erratically. This
-page explains how we find the boundary of the valid region and why it matters.
+lens, but outside that region, they can behave erratically. This
+page explains how we find the boundary of the valid region and why this matters.
 
 The problem
 -----------
@@ -14,7 +14,7 @@ coordinates (x, y) to distorted coordinates (x', y') using a polynomial in
 the radial distance r = sqrt(x² + y²). The polynomial was fitted to
 calibration points, typically covering the image sensor area.
 
-Outside the calibration region, the polynomial is extrapolating. Polynomials
+Outside the calibration region, the polynomial is extrapolating, and polynomials
 are notoriously bad at extrapolation. A sixth-degree polynomial that fits
 nicely within [-1, 1] can shoot off to infinity or oscillate wildly just
 outside that range.
@@ -44,7 +44,7 @@ Finding the boundary
 --------------------
 
 For the Brown-Conrady model, the Jacobian determinant is a complicated function
-of (x, y) and the 12 distortion coefficients. We could search for zeros in 2D,
+of (x, y) and the distortion coefficients (up to 14 with tilt). We could search for zeros in 2D,
 but there is a simpler approach: search in polar coordinates.
 
 The distortion is approximately radially symmetric (the dominant terms depend
@@ -62,7 +62,7 @@ The algorithm has three phases:
 2. **Coarse line search**: For each angle in a coarse sampling (24 angles),
    we shoot a ray outward from the origin. We evaluate the Jacobian determinant
    at many points along the ray, with denser sampling near the origin where
-   the boundary typically lies. We find where the determinant first becomes
+   the boundary often lies. We find where the determinant first becomes
    negative.
 
 3. **Newton refinement**: We interpolate the coarse results to a dense
@@ -77,7 +77,7 @@ For a point (x, y) = (r·cos(α), r·sin(α)), the Jacobian determinant is::
 
     det(J) = (∂x'/∂x)(∂y'/∂y) - (∂x'/∂y)(∂y'/∂x)
 
-Expanding this for the full Brown-Conrady model with 12 coefficients yields
+Expanding this for the full Brown-Conrady model (12 coefficients, or 14 with tilt) yields
 a long expression. We used SymPy to derive the formula and
 common subexpression elimination to simplify it. The result is still dozens
 of intermediate variables, but it evaluates efficiently.
@@ -140,8 +140,8 @@ boundary curve for each angle.
 Why this matters
 ----------------
 
-Without validity checking, lens undistortion can produce garbage. Points
-outside the valid region may undistort to wildly wrong locations, or the
+Without validity checking, lens undistortion can produce artifacts in the image. Points
+outside the valid region may undistort to wrong locations, typically resulting in a reflection effect across the validity boundary, duplicating some parts of the image, or the
 iterative undistortion algorithm may fail to converge.
 
 For camera reprojection (warping an image from one camera view to another),
@@ -153,5 +153,5 @@ region is the intersection of:
 - The image boundaries of both cameras
 - The region visible from both camera orientations (clipping at z=0)
 
-This intersection can be computed using polygon operations. The result tells
+This intersection can be explicitly computed using polygon operations, but we can also obtain a validity mask during the reprojection, by setting and preserving nan values for invalid positions. The result tells
 us which pixels in the output have meaningful values and which are undefined.

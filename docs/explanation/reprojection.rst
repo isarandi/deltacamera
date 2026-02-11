@@ -1,8 +1,11 @@
 Camera Reprojection
 ===================
 
-Reprojection transforms points or images from one camera view to another. This
-page explains how the reprojection pipeline works, the coordinate spaces
+DeltaCamera is all about changes in camera parameters and how that affects the projection of 3D points to 2D images.
+One of the most common operations is reprojection: transforming points or images
+from one camera view to another, for example to virtually rotate the camera towards a specific object or to undistort a fisheye image.
+
+This page explains how the reprojection pipeline works in DeltaCamera, the coordinate spaces
 involved, and the optimizations that make it practical.
 
 The problem
@@ -88,7 +91,7 @@ Lens type combinations
 The code handles all combinations of three lens types:
 
 - **NONE**: No distortion (pinhole model)
-- **USUAL**: Brown-Conrady 12-parameter model
+- **USUAL**: Brown-Conrady model (up to 14 parameters with tilt)
 - **FISH**: Kannala-Brandt fisheye model
 
 This gives 9 combinations. Each has a specialized function that skips
