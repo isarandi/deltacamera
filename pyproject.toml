@@ -57,6 +57,8 @@ test = [
     "pytest>=7.0",
     "pytest-cov",
     "scikit-image",
+    "pyrender",
+    "trimesh",
 ]
 lint = [
     "ruff",
