@@ -16,8 +16,7 @@ from .distortion_models import (
 )
 from .util import allclose_or_nones, equal_or_nones, unit_vec
 
-if TYPE_CHECKING:
-    from . import Camera
+_UNSET = object()
 
 
 class Camera:
@@ -53,7 +52,7 @@ class Camera:
         self,
         optical_center=None,
         rot_world_to_cam=None,
-        intrinsic_matrix=np.eye(3),
+        intrinsic_matrix=None,
         distortion_coeffs=None,
         world_up=(0, 0, 1),
         extrinsic_matrix=None,
@@ -85,6 +84,8 @@ class Camera:
             else:
                 self.t = (-self.R.T @ np.asarray(trans_after_rot, dtype=dtype)).view(DeprecatingArray)
 
+        if intrinsic_matrix is None:
+            intrinsic_matrix = np.eye(3, dtype=dtype)
         self.intrinsic_matrix = np.asanyarray(intrinsic_matrix, dtype=dtype).view(DeprecatingArray)
 
         # Handle distortion: prefer distortion_model, deprecate distortion_coeffs
@@ -545,31 +546,27 @@ class Camera:
             new_imshape = new_imshape if new_imshape is not None else imshape
             self.center_principal_point(new_imshape)
 
-    def undistort_precise(
+    def undistorted_with_optimal_intrinsics(
         self,
         imshape_distorted=None,
         imshape_undistorted=None,
         alpha_balance=None,
         center_principal_point=False,
-        inplace=True,
     ):
-        cam = self if inplace else self.copy()
         if alpha_balance is None:
-            cam._distortion_model = None
-            cam.square_pixels()
-            cam.intrinsic_matrix[0, 1] = 0
+            cam = self.undistorted(square_pixels=True, zero_skew=True)
             return cam, None, None
         else:
-            cam.intrinsic_matrix, box, poly = (
+            new_K, box, poly = (
                 validity.get_optimal_undistorted_intrinsics(
-                    cam,
+                    self,
                     imshape_distorted,
                     imshape_undistorted,
                     alpha_balance,
                     center_principal_point,
                 )
             )
-            cam.distortion_coeffs = None
+            cam = self.copy(intrinsic_matrix=new_K, distortion_model=None)
             return cam, box, poly
 
     @camera_transform
@@ -731,6 +728,21 @@ class Camera:
             return None
         return self._distortion_model.coeffs
 
+    @distortion_coeffs.setter
+    def distortion_coeffs(self, value):
+        """Set distortion via raw coefficients (deprecated).
+
+        This setter is deprecated. Use ``copy(distortion_model=...)`` instead.
+        """
+        warnings.warn(
+            "Setting distortion_coeffs is deprecated. "
+            "Use copy(distortion_model=BrownConradyEx(...)) or "
+            "copy(distortion_model=FisheyeKannalaBrandt(...)) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self._distortion_model = infer_distortion_model(value)
+
     @property
     def image_shape(self) -> Optional[tuple]:
         """Image shape as (height, width) tuple, or None if not set."""
@@ -754,6 +766,8 @@ class Camera:
             and np.allclose(self.R, other_camera.R)
             and np.allclose(self.t, other_camera.t)
             and allclose_or_nones(self_coeffs, other_coeffs)
+            and np.allclose(self.world_up, other_camera.world_up)
+            and self._image_shape == other_camera._image_shape
         )
 
     def is_equal(self, other):
@@ -766,6 +780,8 @@ class Camera:
             and np.array_equal(self.R, other.R)
             and np.array_equal(self.t, other.t)
             and equal_or_nones(self_coeffs, other_coeffs)
+            and np.array_equal(self.world_up, other.world_up)
+            and self._image_shape == other._image_shape
         )
 
     def __hash__(self) -> int:
@@ -818,9 +834,9 @@ class Camera:
         R=None,
         optical_center=None,
         t=None,
-        distortion_model=None,
+        distortion_model=_UNSET,
         world_up=None,
-        image_shape=None,
+        image_shape=_UNSET,
         image_size=None,
     ) -> "Camera":
         """Create a copy of this camera, optionally with modified parameters.
@@ -833,9 +849,9 @@ class Camera:
             R: Alias for rot_world_to_cam
             optical_center: New optical center (will be copied)
             t: Alias for optical_center
-            distortion_model: New distortion model
+            distortion_model: New distortion model (pass None to remove distortion)
             world_up: New world up vector (will be copied)
-            image_shape: New image shape (height, width)
+            image_shape: New image shape (height, width), or None to unset
             image_size: New image size (width, height)
 
         Returns:
@@ -854,7 +870,7 @@ class Camera:
             optical_center = t
 
         # Handle image_shape/image_size
-        if image_shape is not None and image_size is not None:
+        if image_shape is not _UNSET and image_size is not None:
             raise ValueError("Provide only one of `image_shape` or `image_size`")
         if image_size is not None:
             image_shape = (int(image_size[1]), int(image_size[0]))
@@ -890,14 +906,14 @@ class Camera:
             c.world_up = np.array(self.world_up).view(DeprecatingArray)
 
         # Distortion model (immutable, always can be shared)
-        if distortion_model is not None:
+        if distortion_model is not _UNSET:
             c._distortion_model = distortion_model
         else:
             c._distortion_model = self._distortion_model
 
         # Image shape (immutable tuple, always can be shared)
-        if image_shape is not None:
-            c._image_shape = tuple(image_shape)
+        if image_shape is not _UNSET:
+            c._image_shape = tuple(image_shape) if image_shape is not None else None
         else:
             c._image_shape = self._image_shape
 
@@ -928,21 +944,36 @@ class Camera:
         new_R = point_coordinate_rotation @ self.R
         return self.copy(rot_world_to_cam=new_R)
 
-    def turned_towards(self, target_point, up_vector=None) -> "Camera":
-        """Return a new camera with optical axis pointing at target_point.
+    def turned_towards(
+        self, target_image_point=None, target_world_point=None, target_cam_point=None
+    ) -> "Camera":
+        """Return a new camera with optical axis pointing at a target point.
+
+        Exactly one of the three target arguments must be provided.
 
         Args:
-            target_point: World coordinates of the target point
-            up_vector: Optional world up vector (uses self.world_up if None)
+            target_image_point: Image coordinates of the target point
+            target_world_point: World coordinates of the target point
+            target_cam_point: Camera coordinates of the target point
 
         Returns:
             New Camera pointing at target
         """
-        target_point = np.asarray(target_point, dtype=np.float32)
-        world_up = np.asarray(up_vector, dtype=np.float32) if up_vector is not None else self.world_up
+        if target_image_point is not None:
+            target_world_point = self.image_to_world(target_image_point)
+        elif target_cam_point is not None:
+            target_world_point = self.camera_to_world(target_cam_point)
 
-        new_z = unit_vec(target_point - self.t)
+        target_world_point = np.asarray(target_world_point, dtype=np.float32)
+        world_up = self.world_up
+
+        new_z = unit_vec(target_world_point - self.t)
         new_x = unit_vec(np.cross(new_z, world_up))
+        if not np.all(np.isfinite(new_x)):
+            # Looking along world_up, pick an arbitrary perpendicular frame
+            new_x = unit_vec(np.cross(new_z, np.array([1, 0, 0], dtype=np.float32)))
+            if not np.all(np.isfinite(new_x)):
+                new_x = unit_vec(np.cross(new_z, np.array([0, 1, 0], dtype=np.float32)))
         new_y = np.cross(new_z, new_x)
 
         new_R = np.row_stack([new_x, new_y, new_z]).astype(np.float32)
@@ -1018,6 +1049,23 @@ class Camera:
         offset = target_point - current_point
         return self.image_shifted(offset)
 
+    def point_shifted_to_center(self, point) -> "Camera":
+        """Return a new camera with principal point adjusted so that ``point`` appears at the
+        image center.
+
+        Requires image_shape to be set.
+
+        Args:
+            point: Image coordinates of the point to center
+
+        Returns:
+            New Camera with the point centered in the image
+        """
+        if self._image_shape is None:
+            raise ValueError("image_shape must be set for point_shifted_to_center")
+        center = np.float32([self._image_shape[1] - 1, self._image_shape[0] - 1]) / 2
+        return self.point_shifted_to(point, center)
+
     def image_cropped(self, new_shape, anchor=(0, 0)) -> "Camera":
         """Return a camera adjusted for a cropped image.
 
@@ -1073,23 +1121,31 @@ class Camera:
 
         return self.copy(intrinsic_matrix=new_K, image_shape=new_shape)
 
-    def image_scaled(self, factor) -> "Camera":
+    def image_scaled(self, factor, center_subpixels=False) -> "Camera":
         """Return a camera adjusted for a uniformly scaled image.
 
-        Requires image_shape to be set.
+        Scales both focal length and principal point (origin-anchored).
+        If image_shape is set, it is also scaled accordingly.
 
         Args:
             factor: Scale factor (>1 makes image larger)
+            center_subpixels: If True, shift the principal point by (factor-1)/2
+                so that each block of ``factor`` x ``factor`` subpixels is centered
+                on the corresponding original pixel. Use this when supersampling
+                for subsequent area downsampling.
 
         Returns:
             New Camera for the scaled image
         """
-        if self._image_shape is None:
-            raise ValueError("image_shape must be set to scale camera")
+        new_shape = None
+        if self._image_shape is not None:
+            new_shape = (int(self._image_shape[0] * factor), int(self._image_shape[1] * factor))
 
-        new_shape = (int(self._image_shape[0] * factor), int(self._image_shape[1] * factor))
         new_K = self.intrinsic_matrix.copy()
         new_K[:2] *= np.expand_dims(np.float32(factor), -1)
+
+        if center_subpixels:
+            new_K[:2, 2] += (factor - 1) / 2
 
         return self.copy(intrinsic_matrix=new_K, image_shape=new_shape)
 
@@ -1196,20 +1252,16 @@ class Camera:
             new_shape = (self._image_shape[1], self._image_shape[0])
             return self.image_rotated(-np.pi / 2, anchor=(a, a)).copy(image_shape=new_shape)
 
-    def undistorted(self, square_pixels=False) -> "Camera":
+    def undistorted(self, square_pixels=False, zero_skew=False) -> "Camera":
         """Return a new camera with distortion removed.
-
-        Requires image_shape to be set for proper handling.
 
         Args:
             square_pixels: If True, adjust intrinsics for square pixels
+            zero_skew: If True, set the skew coefficient to zero
 
         Returns:
             New Camera without distortion
         """
-        if self._image_shape is None:
-            raise ValueError("image_shape must be set to create undistorted camera")
-
         new_K = self.intrinsic_matrix.copy()
         if square_pixels:
             fx, fy = new_K[0, 0], new_K[1, 1]
@@ -1218,6 +1270,8 @@ class Camera:
                 [[fmean / fx, 0, 0], [0, fmean / fy, 0], [0, 0, 1]], np.float32
             )
             new_K = multiplier @ new_K
+        if zero_skew:
+            new_K[0, 1] = 0
 
         return self.copy(intrinsic_matrix=new_K, distortion_model=None)
 
