@@ -47,12 +47,12 @@ def backproject_K_depthval(points, K, depth_val, dst):
         dst = np.empty((n_points, 3), dtype=points.dtype)
     depth_per_k11 = depth_val / K[1, 1]
     depth_per_k00 = depth_val / K[0, 0]
-    K01 = K[0, 1]
+    K01_per_K11 = K[0, 1] / K[1, 1]
     K02 = K[0, 2]
     K12 = K[1, 2]
     for i in numba.prange(n_points):
         y_n = (points[i, 1] - K12)
-        dst[i, 0] = (points[i, 0] - K02 - y_n * K01) * depth_per_k00
+        dst[i, 0] = (points[i, 0] - K02 - y_n * K01_per_K11) * depth_per_k00
         dst[i, 1] = y_n * depth_per_k11
         dst[i, 2] = depth_val
     return dst

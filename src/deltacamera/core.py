@@ -341,9 +341,13 @@ class Camera:
         #     )
 
         im_points = self.camera_to_image(cam_points, validate_distortion=validate_distortion)
-        is_valid = np.logical_and(is_valid, cv2.inRange(
-            im_points[np.newaxis], lowerb=(0, 0), upperb=(float(imsize[0]), float(imsize[1]))
-        ).squeeze(0))
+        # Use strict upper bound: pixels at exactly (width, height) are out of bounds.
+        # cv2.inRange uses <=, so use nextafter to get the largest float < imsize.
+        ub_x = np.nextafter(np.float32(imsize[0]), np.float32(0))
+        ub_y = np.nextafter(np.float32(imsize[1]), np.float32(0))
+        is_valid = is_valid & cv2.inRange(
+            im_points[np.newaxis], lowerb=(0, 0), upperb=(float(ub_x), float(ub_y)),
+        ).squeeze(0)
         return is_valid
 
     # Methods to transform the camera parameters
@@ -593,6 +597,7 @@ class Camera:
         is flipped."""
         self.horizontal_flip()
         self.intrinsic_matrix[0, 2] = (imshape[1] - 1) - self.intrinsic_matrix[0, 2]
+        self.intrinsic_matrix[0, 1] *= -1
         if self.has_nonfisheye_distortion():
             # Create new distortion model with flipped coefficients
             coeffs = self._distortion_model.coeffs.copy()
@@ -635,6 +640,11 @@ class Camera:
 
         new_z = unit_vec(target_world_point - self.t)
         new_x = unit_vec(np.cross(new_z, self.world_up))
+        if not np.all(np.isfinite(new_x)):
+            # Looking along world_up, pick an arbitrary perpendicular frame
+            new_x = unit_vec(np.cross(new_z, np.array([1, 0, 0], dtype=np.float32)))
+            if not np.all(np.isfinite(new_x)):
+                new_x = unit_vec(np.cross(new_z, np.array([0, 1, 0], dtype=np.float32)))
         new_y = np.cross(new_z, new_x)
 
         # row_stack because we need the inverse transform (we make a matrix that transforms
@@ -676,7 +686,9 @@ class Camera:
 
         This ignores the lens distortion coeffs."""
         focals = np.diagonal(self.intrinsic_matrix[:2, :2])
-        return np.rad2deg(2 * np.arctan(np.max(imshape[:2] / (2 * focals))))
+        # imshape is (height, width), focals is (fx, fy)
+        # height goes with fy, width goes with fx, so reverse imshape
+        return np.rad2deg(2 * np.arctan(np.max(imshape[:2][::-1] / (2 * focals))))
 
     def get_distortion_coeffs(
         self, n_coeffs_min: int = 5, n_coeffs_max: Optional[int] = None
@@ -690,8 +702,10 @@ class Camera:
             return coeffs
         elif len(coeffs) < n_coeffs_min:
             return np.pad(coeffs, (0, n_coeffs_min - len(coeffs)))
-        else:
+        elif n_coeffs_max is not None:
             return coeffs[:n_coeffs_max]
+        else:
+            return coeffs
 
     def has_distortion(self) -> bool:
         """Check if the camera has nonzero lens distortion."""
@@ -1105,6 +1119,7 @@ class Camera:
             new_R[0] *= -1
             new_K = self.intrinsic_matrix.copy()
             new_K[0, 2] = (self._image_shape[1] - 1) - new_K[0, 2]
+            new_K[0, 1] *= -1
             return self.copy(rot_world_to_cam=new_R, intrinsic_matrix=new_K)
 
     def image_rotated(self, angle, anchor=None) -> "Camera":
