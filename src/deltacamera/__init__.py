@@ -23,7 +23,7 @@ __all__ = [
     # Distortion models
     "LensDistortionModel",
     "FisheyeKannalaBrandt",
-    "BrownConrady",
+    "BrownConradyEx",
     # Reprojection
     "reproject_box",
     "reproject_box_corners",
@@ -48,7 +48,7 @@ from .core import (
 )
 
 from .distortion_models import (
-    BrownConrady,
+    BrownConradyEx,
     FisheyeKannalaBrandt,
     LensDistortionModel,
 )

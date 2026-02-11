@@ -20,7 +20,7 @@ from conftest import (
 # Brown-Conrady distortion roundtrip tests
 # =============================================================================
 
-class TestBrownConradyRoundtrip:
+class TestBrownConradyExRoundtrip:
     """Test that undistort(distort(p)) ≈ p for Brown-Conrady model."""
 
     @pytest.mark.parametrize("d", BROWN_CONRADY_COEFFS)

@@ -66,7 +66,7 @@ class FisheyeKannalaBrandt(LensDistortionModel):
 
 
 @dataclass(frozen=True, eq=False)
-class BrownConrady(LensDistortionModel):
+class BrownConradyEx(LensDistortionModel):
     """Brown-Conrady distortion model.
 
     Requires 5, 8, 12, or 14 coefficients.
@@ -89,7 +89,7 @@ class BrownConrady(LensDistortionModel):
         valid_lengths = {5, 8, 12, 14}
         if len(self.coeffs) not in valid_lengths:
             raise ValueError(
-                f"BrownConrady requires 5, 8, 12, or 14 coefficients, got {len(self.coeffs)}"
+                f"BrownConradyEx requires 5, 8, 12, or 14 coefficients, got {len(self.coeffs)}"
             )
 
     @staticmethod
@@ -216,7 +216,7 @@ def infer_distortion_model(
     Returns:
         - None if coeffs is None or all zeros
         - FisheyeKannalaBrandt if exactly 4 coefficients
-        - BrownConrady for other lengths (5, 8, 12, or 14)
+        - BrownConradyEx for other lengths (5, 8, 12, or 14)
 
     Raises:
         ValueError: If coefficient length is invalid for Brown-Conrady model.
@@ -231,4 +231,4 @@ def infer_distortion_model(
     if len(coeffs) == 4:
         return FisheyeKannalaBrandt(coeffs)
     else:
-        return BrownConrady(coeffs)
+        return BrownConradyEx(coeffs)
