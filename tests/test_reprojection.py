@@ -300,7 +300,7 @@ class TestDepthMapReprojection:
         """Ground truth: render depth from two rotations, distort both, reproject, compare."""
         import os
         os.environ.setdefault('PYOPENGL_PLATFORM', 'egl')
-        import pyrender
+        pyrender = pytest.importorskip('pyrender', reason='pyrender/EGL not available')
         import trimesh
         from scipy.spatial.transform import Rotation
 
