@@ -40,10 +40,8 @@ def get_maps_and_mask_cached(
     # In other cases, if we're not having exactly equal Rs, there will be small numerical errors
     # even if the intended relative rotation is the same. This could be handled in the future.
     # Perhaps through quantization or custom cache with binning then verifying.
-    old_camera2 = old_camera.copy()
-    new_camera2 = new_camera.copy()
-    new_camera2.R = old_camera.R.T @ new_camera.R
-    old_camera2.R = np.eye(3, dtype=np.float32)
+    old_camera2 = old_camera.copy(R=np.eye(3, dtype=np.float32))
+    new_camera2 = new_camera.copy(R=new_camera.R @ old_camera.R.T)
     old_camdict = cam2dict(old_camera2)
     new_camdict = cam2dict(new_camera2)
     return _get_maps_and_mask_cached(

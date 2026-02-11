@@ -31,10 +31,10 @@ def make(h, w, old_camera, new_camera, precomp):
         return make_no_distortion(
             h,
             w,
-            new_camera.intrinsic_matrix,
-            new_camera.R,
-            old_camera.R,
             old_camera.intrinsic_matrix,
+            old_camera.R,
+            new_camera.R,
+            new_camera.intrinsic_matrix,
         )
 
     # USUAL
