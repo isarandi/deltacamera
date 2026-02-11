@@ -6,6 +6,7 @@ import numpy as np
 import rlemasklib
 
 from . import core, coordframes, distortion, maps_impl, validity
+from .distortion_models import infer_distortion_model
 
 
 def make_maps(old_camera, new_camera, output_imshape, precomp_undist_maps):
@@ -74,7 +75,8 @@ def make_maps_and_mask(old_camera, new_camera, input_imshape, output_imshape, pr
 
 
 def cam2dict(camera):
-    dicti = dict(K=camera.intrinsic_matrix, R=camera.R, t=camera.t, d=camera.distortion_coeffs)
+    d = camera._distortion_model.coeffs if camera._distortion_model else None
+    dicti = dict(K=camera.intrinsic_matrix, R=camera.R, t=camera.t, d=d)
     return msgpack_numpy.packb(dicti)
 
 
@@ -84,7 +86,7 @@ def dict2cam(dicti):
         intrinsic_matrix=dicti["K"],
         rot_world_to_cam=dicti["R"],
         optical_center=dicti["t"],
-        distortion_coeffs=dicti["d"],
+        distortion_model=infer_distortion_model(dicti["d"]),
     )
 
 

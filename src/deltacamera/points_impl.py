@@ -96,7 +96,7 @@ def make(p, old_camera, new_camera, precomp):
     # FISH
     if old_lens == LensType.FISH and new_lens == LensType.NONE:
         if precomp:
-            dist_map, rud_old = precomp_map_distort_fisheye_cached(old_camera.distortion_coeffs)
+            dist_map, rud_old = precomp_map_distort_fisheye_cached(old_camera._distortion_model.coeffs)
             return make_old_fisheye_from_precomp(
                 p,
                 old_camera.intrinsic_matrix,
@@ -107,11 +107,11 @@ def make(p, old_camera, new_camera, precomp):
                 new_camera.intrinsic_matrix,
             )
         else:
-            rud_old = validity.fisheye_valid_r_max_cached(old_camera.distortion_coeffs)
+            rud_old = validity.fisheye_valid_r_max_cached(old_camera._distortion_model.coeffs)
             return make_old_fisheye(
                 p,
                 old_camera.intrinsic_matrix,
-                old_camera.distortion_coeffs,
+                old_camera._distortion_model.coeffs,
                 rud_old,
                 old_camera.R,
                 new_camera.R,
@@ -121,7 +121,7 @@ def make(p, old_camera, new_camera, precomp):
     if old_lens == LensType.NONE and new_lens == LensType.FISH:
         if precomp:
             undist_map, rud_new = precomp_map_undistort_fisheye_cached(
-                new_camera.distortion_coeffs
+                new_camera._distortion_model.coeffs
             )
             return make_new_fisheye_from_precomp(
                 p,
@@ -133,13 +133,13 @@ def make(p, old_camera, new_camera, precomp):
                 new_camera.intrinsic_matrix,
             )
         else:
-            rud_new = validity.fisheye_valid_r_max_cached(new_camera.distortion_coeffs)
+            rud_new = validity.fisheye_valid_r_max_cached(new_camera._distortion_model.coeffs)
             return make_new_fisheye(
                 p,
                 old_camera.intrinsic_matrix,
                 old_camera.R,
                 new_camera.R,
-                new_camera.distortion_coeffs,
+                new_camera._distortion_model.coeffs,
                 rud_new,
                 new_camera.intrinsic_matrix,
             )
@@ -147,9 +147,9 @@ def make(p, old_camera, new_camera, precomp):
     if old_lens == LensType.FISH and new_lens == LensType.FISH:
         if precomp:
             undist_map, rud_new = precomp_map_undistort_fisheye_cached(
-                new_camera.distortion_coeffs
+                new_camera._distortion_model.coeffs
             )
-            dist_map, rud_old = precomp_map_distort_fisheye_cached(old_camera.distortion_coeffs)
+            dist_map, rud_old = precomp_map_distort_fisheye_cached(old_camera._distortion_model.coeffs)
             return make_both_fisheye_from_precomp(
                 p,
                 old_camera.intrinsic_matrix,
@@ -162,16 +162,16 @@ def make(p, old_camera, new_camera, precomp):
                 new_camera.intrinsic_matrix,
             )
         else:
-            rud_old = validity.fisheye_valid_r_max_cached(old_camera.distortion_coeffs)
-            rud_new = validity.fisheye_valid_r_max_cached(new_camera.distortion_coeffs)
+            rud_old = validity.fisheye_valid_r_max_cached(old_camera._distortion_model.coeffs)
+            rud_new = validity.fisheye_valid_r_max_cached(new_camera._distortion_model.coeffs)
             return make_both_fisheye(
                 p,
                 old_camera.intrinsic_matrix,
-                old_camera.distortion_coeffs,
+                old_camera._distortion_model.coeffs,
                 rud_old,
                 old_camera.R,
                 new_camera.R,
-                new_camera.distortion_coeffs,
+                new_camera._distortion_model.coeffs,
                 rud_new,
                 new_camera.intrinsic_matrix,
             )
@@ -182,7 +182,7 @@ def make(p, old_camera, new_camera, precomp):
         polar_ud_old = validity.get_valid_distortion_region_cached(old_d.tobytes())
         if precomp:
             undist_map, rud_new = precomp_map_undistort_fisheye_cached(
-                new_camera.distortion_coeffs
+                new_camera._distortion_model.coeffs
             )
             return make_old_usual_new_fisheye_from_precomp(
                 p,
@@ -196,7 +196,7 @@ def make(p, old_camera, new_camera, precomp):
                 new_camera.intrinsic_matrix,
             )
         else:
-            rud_new = validity.fisheye_valid_r_max_cached(new_camera.distortion_coeffs)
+            rud_new = validity.fisheye_valid_r_max_cached(new_camera._distortion_model.coeffs)
             return make_old_usual_new_fisheye(
                 p,
                 old_camera.intrinsic_matrix,
@@ -204,7 +204,7 @@ def make(p, old_camera, new_camera, precomp):
                 polar_ud_old,
                 old_camera.R,
                 new_camera.R,
-                new_camera.distortion_coeffs,
+                new_camera._distortion_model.coeffs,
                 rud_new,
                 new_camera.intrinsic_matrix,
             )
@@ -213,7 +213,7 @@ def make(p, old_camera, new_camera, precomp):
         new_d = new_camera.get_distortion_coeffs(14)
         if precomp:
             undist_maps, undist_f = precomp_maps_undistort_cached(new_d)
-            dist_map, rud_old = precomp_map_distort_fisheye_cached(old_camera.distortion_coeffs)
+            dist_map, rud_old = precomp_map_distort_fisheye_cached(old_camera._distortion_model.coeffs)
             return make_old_fisheye_new_usual_from_precomp(
                 p,
                 old_camera.intrinsic_matrix,
@@ -226,12 +226,12 @@ def make(p, old_camera, new_camera, precomp):
                 new_camera.intrinsic_matrix,
             )
         else:
-            rud_old = validity.fisheye_valid_r_max_cached(old_camera.distortion_coeffs)
+            rud_old = validity.fisheye_valid_r_max_cached(old_camera._distortion_model.coeffs)
             polar_ud_new = validity.get_valid_distortion_region_cached(new_d.tobytes())
             return make_old_fisheye_new_usual(
                 p,
                 old_camera.intrinsic_matrix,
-                old_camera.distortion_coeffs,
+                old_camera._distortion_model.coeffs,
                 rud_old,
                 old_camera.R,
                 new_camera.R,
@@ -437,7 +437,7 @@ def make_new_fisheye_from_precomp(p, K_old, R_old, R_new, undist_map, rud_new, K
 def make_old_fisheye_from_precomp(p, K_old, dist_map, rud_old, R_old, R_new, K_new):
     pun_old = make_start(p, R_old, R_new, K_new)
     ru_old, rd_old = rud_old
-    pn_old = apply_fisheye_map_inplace(pun_old, dist_map, ru_old)
+    pn_old = apply_fisheye_map_inplace(pun_old, dist_map, np.minimum(ru_old, np.float32(3.0)))
     p_old = make_intrinsics(pn_old, K_old)
     return p_old
 
@@ -451,7 +451,7 @@ def make_both_fisheye_from_precomp(
     pun_new = apply_fisheye_map_inplace(pn_new, undist_map, rd_new)
     pun_old = apply_middle_inplace(pun_new, R_old, R_new)
     ru_old, rd_old = rud_old
-    pn_old = apply_fisheye_map_inplace(pun_old, dist_map, ru_old)
+    pn_old = apply_fisheye_map_inplace(pun_old, dist_map, np.minimum(ru_old, np.float32(3.0)))
     p_old = make_intrinsics(pn_old, K_old)
     return p_old
 
@@ -479,6 +479,6 @@ def make_old_fisheye_new_usual_from_precomp(
     pun_new = apply_distortion_map_inplace(pn_new, undist_maps, undist_f)
     pun_old = apply_middle_inplace(pun_new, R_old, R_new)
     ru_old, rd_old = rud_old
-    pn_old = apply_fisheye_map_inplace(pun_old, dist_map, ru_old)
+    pn_old = apply_fisheye_map_inplace(pun_old, dist_map, np.minimum(ru_old, np.float32(3.0)))
     p_old = make_intrinsics(pn_old, K_old)
     return p_old
