@@ -286,6 +286,77 @@ def make(h, w, old_camera, new_camera, precomp):
         f"Unsupported lens type combination: {old_lens.name} -> {new_lens.name}")
 
 
+def make_z_factors(h, w, old_camera, new_camera, precomp):
+    """Compute per-pixel z-correction factors for depth map reprojection.
+
+    For each output pixel, computes the z-component of the ray direction
+    when rotated from the new camera frame to the old camera frame.
+    This follows the same undistortion pipeline as ``make`` but only
+    computes the third coordinate instead of the full reprojection.
+    """
+    R_rel_row2 = (old_camera.R @ new_camera.R.T)[2].astype(np.float32)
+    K_new = new_camera.intrinsic_matrix
+    new_lens = get_lens_type(new_camera)
+
+    if new_lens == LensType.NONE:
+        return _z_factors_pinhole(h, w, K_new, R_rel_row2)
+
+    pn_new = make_undo_intrinsics(h, w, K_new)
+
+    if new_lens == LensType.USUAL:
+        new_d = new_camera.get_distortion_coeffs(14)
+        if precomp:
+            undist_maps, undist_f = precomp_maps_undistort_cached(new_d)
+            pun_new = apply_distortion_map_inplace(pn_new, undist_maps, undist_f)
+        else:
+            polar_ud_new = validity.get_valid_distortion_region_cached(new_d.tobytes())
+            pun_new = distortion._undistort_points(
+                pn_new, new_d, polar_ud_new,
+                check_validity=True, clip_to_valid=False, include_jacobian=False,
+                n_iter_fixed_point=5, n_iter_newton=2, lambda_=5e-1,
+            )
+    elif new_lens == LensType.FISH:
+        if precomp:
+            undist_map, rud_new = precomp_map_undistort_fisheye_cached(
+                new_camera._distortion_model.coeffs
+            )
+            _ru_new, rd_new = rud_new
+            pun_new = apply_fisheye_map_inplace(pn_new, undist_map, rd_new)
+        else:
+            rud_new = validity.fisheye_valid_r_max_cached(new_camera._distortion_model.coeffs)
+            pun_new = distortion._undistort_points_fisheye(
+                pn_new, new_camera._distortion_model.coeffs, rud_new,
+                n_iter_newton=3, check_validity=True,
+            )
+
+    return _z_factors_from_pun(pun_new, R_rel_row2, h, w)
+
+
+@numba.njit(error_model='numpy', cache=True)
+def _z_factors_pinhole(h, w, K_new, R_rel_row2):
+    """z-factor map for undistorted new camera (no intermediate arrays)."""
+    fx = K_new[0, 0]
+    fy = K_new[1, 1]
+    cx = K_new[0, 2]
+    cy = K_new[1, 2]
+    result = np.empty((h, w), np.float32)
+    for y in range(h):
+        for x in range(w):
+            xn = (np.float32(x) - cx) / fx
+            yn = (np.float32(y) - cy) / fy
+            result[y, x] = R_rel_row2[0] * xn + R_rel_row2[1] * yn + R_rel_row2[2]
+    return result
+
+
+@numba.njit(error_model='numpy', cache=True)
+def _z_factors_from_pun(pun, R_rel_row2, h, w):
+    """z-factor map from pre-computed undistorted normalized coords (h*w, 2)."""
+    result = np.empty((h, w), np.float32)
+    for i in range(pun.shape[0]):
+        result.flat[i] = R_rel_row2[0] * pun[i, 0] + R_rel_row2[1] * pun[i, 1] + R_rel_row2[2]
+    return result
+
+
 @numba.njit(error_model='numpy', cache=True)
 def make_no_distortion(h, w, K_old, R_old, R_new, K_new):
     if np.array_equal(R_old, R_new):

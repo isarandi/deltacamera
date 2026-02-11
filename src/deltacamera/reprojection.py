@@ -8,31 +8,10 @@ import numba
 import numpy as np
 import rlemasklib
 
-from . import coordframes, distortion, maps, points_impl, util, validity
+from . import coordframes, maps, maps_impl, points_impl, validity
 
 if typing.TYPE_CHECKING:
     from . import Camera
-
-
-def _resolve_output_imshape(output_imshape, new_camera, param_name="output_imshape"):
-    """Resolve output image shape from parameter or camera.image_shape.
-
-    Emits deprecation warning if explicit parameter is provided.
-    """
-    if output_imshape is not None:
-        warnings.warn(
-            f"{param_name} parameter is deprecated. Set new_camera.image_shape instead.",
-            DeprecationWarning,
-            stacklevel=3,
-        )
-        return output_imshape
-    elif new_camera.image_shape is not None:
-        return new_camera.image_shape
-    else:
-        raise ValueError(
-            f"Output image shape not specified. Either pass {param_name} "
-            "or set new_camera.image_shape."
-        )
 
 
 def reproject_image_points(
@@ -81,7 +60,6 @@ def reproject_image(
     """Transform an `image` captured with `old_camera` to look like it was captured by
     `new_camera`. The optical center (3D world position) of the cameras must be the same, otherwise
     we'd have parallax effects and no unambiguous way to construct the output.
-    Ignores the issue of aliasing altogether.
 
     There are two caching options. If `cache_maps` is True, the coordinate maps for
     this particular reprojection will be cached. If multiple images will be reprojected
@@ -119,7 +97,7 @@ def reproject_image(
     output_imshape = _resolve_output_imshape(output_imshape, new_camera)
 
     if use_linear_srgb:
-        image = decode_srgb(image, dst=None) if use_linear_srgb else image
+        image = decode_srgb(image, dst=None)
 
     if antialias_factor == 1:
         result, mask = reproject_image_aliased(
@@ -143,8 +121,7 @@ def reproject_image(
             return result
 
     a = antialias_factor
-    highres_new_camera = new_camera.scale_output(a, inplace=False)
-    highres_new_camera.intrinsic_matrix[:2, 2] += (a - 1) / 2
+    highres_new_camera = new_camera.image_scaled(a, center_subpixels=True)
     highres_imshape = (a * output_imshape[0], a * output_imshape[1])
     highres_result, highres_mask = reproject_image_aliased(
         image,
@@ -174,6 +151,283 @@ def reproject_image(
         return result
 
 
+def reproject_depth_map(
+    depth_map: np.ndarray,
+    old_camera: "Camera",
+    new_camera: "Camera",
+    output_imshape: tuple = None,
+    interp: int = cv2.INTER_NEAREST,
+    antialias_factor: int = 1,
+    cache_maps: bool = False,
+    precomp_undist_maps: bool = True,
+    return_validity_mask: bool = False,
+) -> np.ndarray:
+    """Reproject a depth map from `old_camera` to `new_camera`.
+
+    Unlike color images, depth values change under rotation because the camera's Z-axis
+    rotates. Each pixel's depth is adjusted by the Z-component of the rotated ray direction.
+
+    Invalid pixels (outside the old image or behind the new camera) are set to NaN.
+
+    When ``antialias_factor`` > 1, the depth is rendered at higher resolution and then
+    block-downsampled with nanmedian (NaN-safe).
+
+    Args:
+        depth_map: Input depth map (float32), where values are Z in old camera space.
+        old_camera: The camera that captured `depth_map`.
+        new_camera: The target camera.
+        output_imshape: (height, width) for the output. Deprecated; set new_camera.image_shape.
+        interp: OpenCV interpolation mode. Default: cv2.INTER_NEAREST.
+        antialias_factor: Supersample factor. Depth is rendered at this multiple of the
+            output resolution, then block-downsampled with nanmedian.
+        cache_maps: Whether to cache coordinate maps.
+        precomp_undist_maps: Whether to precompute undistortion maps.
+        return_validity_mask: If True, also return the validity mask.
+
+    Returns:
+        The reprojected depth map (float32, NaN for invalid pixels), or a tuple of
+        (depth_map, validity_mask) if return_validity_mask is True.
+    """
+    output_imshape = _resolve_output_imshape(output_imshape, new_camera)
+
+    if not np.allclose(old_camera.t, new_camera.t):
+        raise ValueError(
+            "The optical center of the camera must not change, else warping is not enough!"
+        )
+
+    depth_map = np.asarray(depth_map, dtype=np.float32)
+
+    a = antialias_factor
+    if a > 1:
+        hr_camera = new_camera.image_scaled(a, center_subpixels=True)
+        hr_imshape = (a * output_imshape[0], a * output_imshape[1])
+    else:
+        hr_camera = new_camera
+        hr_imshape = output_imshape
+
+    same_rotation = np.allclose(old_camera.R, new_camera.R)
+    is_valid_rle = None
+
+    if not cache_maps and same_rotation and old_camera._distortion_model == new_camera._distortion_model:
+        # Only intrinsics changed: affine warp, no z-correction needed
+        remapped = reproject_image_affine(
+            depth_map, old_camera, hr_camera, hr_imshape,
+            border_mode=cv2.BORDER_CONSTANT, border_value=np.nan, interp=interp,
+        )
+    elif not cache_maps and not old_camera.has_distortion() and not hr_camera.has_distortion():
+        # No distortion: perspective warp + z-correction
+        homography = coordframes.mul_K_M_Kinv(
+            old_camera.intrinsic_matrix, old_camera.R @ hr_camera.R.T,
+            hr_camera.intrinsic_matrix,
+        )
+        remapped = cv2.warpPerspective(
+            depth_map, homography, (hr_imshape[1], hr_imshape[0]),
+            flags=interp | cv2.WARP_INVERSE_MAP,
+            borderMode=cv2.BORDER_CONSTANT, borderValue=np.nan,
+        )
+    else:
+        # General case: full remap
+        remap_maps, is_valid_rle = maps.get_maps_and_mask(
+            old_camera, hr_camera, depth_map.shape[:2], hr_imshape,
+            cache=cache_maps, precomp_undist_maps=precomp_undist_maps,
+        )
+        remapped = cv2.remap(
+            depth_map, remap_maps, None, interp,
+            borderMode=cv2.BORDER_CONSTANT, borderValue=np.nan,
+        )
+
+    if not same_rotation:
+        z_factors = maps_impl.make_z_factors(
+            hr_imshape[0], hr_imshape[1],
+            old_camera, hr_camera, precomp_undist_maps,
+        )
+        _apply_depth_z_correction(remapped, z_factors)
+
+    if is_valid_rle is None:
+        is_valid_rle = validity.get_valid_mask_reproj(
+            old_camera, hr_camera, imshape_old=depth_map.shape[:2], imshape_new=hr_imshape,
+        )
+    is_valid_rle.decode_into(remapped, bg_value=np.nan)
+
+    if a > 1:
+        oh, ow = output_imshape
+        nan_mask = np.isnan(remapped)
+        remapped[nan_mask] = -1e9
+        remapped = cv2.bilateralFilter(remapped, d=-1, sigmaColor=0.1, sigmaSpace=a / 2)
+        remapped[nan_mask] = np.nan
+        _block_nanmedian_inplace(remapped, oh, a, ow)
+        remapped = remapped[:oh, :ow]
+        is_valid_rle = is_valid_rle.avg_pool2d_valid(
+            kernel_size=(a, a), stride=(a, a))
+
+    if return_validity_mask:
+        return remapped, is_valid_rle
+    return remapped
+
+
+
+def reproject_rgbd(
+    image: np.ndarray,
+    depth_map: np.ndarray,
+    old_camera: "Camera",
+    new_camera: "Camera",
+    output_imshape: tuple = None,
+    border_mode: int = cv2.BORDER_CONSTANT,
+    border_value=0,
+    image_interp=None,
+    depth_interp: int = cv2.INTER_NEAREST,
+    antialias_factor: int = 1,
+    dst=None,
+    cache_maps: bool = False,
+    precomp_undist_maps: bool = True,
+    use_linear_srgb: bool = False,
+    return_validity_mask: bool = False,
+) -> tuple:
+    """Reproject an RGB image and depth map together, sharing intermediate computation.
+
+    This is equivalent to calling ``reproject_image`` and ``reproject_depth_map`` separately,
+    but avoids redundant computation of remap maps, homographies, and validity masks.
+
+    When ``antialias_factor`` > 1, both are rendered at higher resolution and then
+    block-downsampled: the image via area averaging, the depth via nanmedian (NaN-safe).
+
+    Args:
+        image: RGB image, shape (H, W, 3).
+        depth_map: Depth map, shape (H, W), float. NaN or 0 marks invalid pixels.
+        old_camera: The camera that captured the image and depth.
+        new_camera: The target camera.
+        output_imshape: (height, width) for the output. If None, uses new_camera.image_shape.
+        border_mode: OpenCV border mode for treating pixels outside the image.
+        border_value: Border value for image pixels outside the input.
+        image_interp: OpenCV interpolation for the image. Default: cv2.INTER_LINEAR.
+        depth_interp: OpenCV interpolation for the depth. Default: cv2.INTER_NEAREST.
+        antialias_factor: Supersample factor. Both image and depth are rendered at this
+            multiple of the output resolution, then downsampled (image: area average,
+            depth: nanmedian).
+        dst: Destination array for the image (optional).
+        cache_maps: Whether to cache coordinate maps for repeated use.
+        precomp_undist_maps: Whether to precompute and cache undistortion maps.
+        use_linear_srgb: If True, decode image from 8-bit sRGB to 16-bit linear space
+            before reprojecting and encode back afterward.
+        return_validity_mask: If True, return (new_image, new_depth, validity_mask).
+
+    Returns:
+        (new_image, new_depth) or (new_image, new_depth, validity_mask).
+    """
+    output_imshape = _resolve_output_imshape(output_imshape, new_camera)
+
+    if image_interp is None:
+        image_interp = cv2.INTER_LINEAR
+
+    if not np.allclose(old_camera.t, new_camera.t):
+        raise ValueError(
+            "The optical center of the camera must not change, else warping is not enough!"
+        )
+
+    if use_linear_srgb:
+        image = decode_srgb(image, dst=None)
+
+    depth_map = np.asarray(depth_map, dtype=np.float32)
+
+    # Set up high-res target camera for antialiasing
+    a = antialias_factor
+    if a > 1:
+        hr_camera = new_camera.image_scaled(a, center_subpixels=True)
+        hr_imshape = (a * output_imshape[0], a * output_imshape[1])
+    else:
+        hr_camera = new_camera
+        hr_imshape = output_imshape
+
+    same_rotation = np.allclose(old_camera.R, new_camera.R)
+    n_channels = image.shape[2] if image.ndim == 3 else 1
+    cv_bv = _cv_border_value(border_value, n_channels)
+    dsize = (hr_imshape[1], hr_imshape[0])
+    image_dst = None if (use_linear_srgb or a > 1) else dst
+    is_valid_rle = None
+
+    if not cache_maps and same_rotation and old_camera._distortion_model == new_camera._distortion_model:
+        # Only intrinsics changed: affine warp, no z-correction needed
+        affine_mat_2x3 = coordframes.relative_intrinsics(
+            hr_camera.intrinsic_matrix, old_camera.intrinsic_matrix)[:2]
+        new_image = cv2.warpAffine(
+            image, affine_mat_2x3, dsize, flags=cv2.WARP_INVERSE_MAP | image_interp,
+            borderMode=border_mode, borderValue=cv_bv, dst=image_dst,
+        )
+        new_depth = cv2.warpAffine(
+            depth_map, affine_mat_2x3, dsize, flags=cv2.WARP_INVERSE_MAP | depth_interp,
+            borderMode=cv2.BORDER_CONSTANT, borderValue=np.nan,
+        )
+    elif not cache_maps and not old_camera.has_distortion() and not new_camera.has_distortion():
+        # No distortion: perspective warp
+        homography = coordframes.mul_K_M_Kinv(
+            old_camera.intrinsic_matrix, old_camera.R @ hr_camera.R.T,
+            hr_camera.intrinsic_matrix,
+        )
+        new_image = cv2.warpPerspective(
+            image, homography, dsize, flags=cv2.WARP_INVERSE_MAP | image_interp,
+            borderMode=border_mode, borderValue=cv_bv, dst=image_dst,
+        )
+        new_depth = cv2.warpPerspective(
+            depth_map, homography, dsize, flags=cv2.WARP_INVERSE_MAP | depth_interp,
+            borderMode=cv2.BORDER_CONSTANT, borderValue=np.nan,
+        )
+    else:
+        # General case: full remap (validity mask comes for free)
+        remap_maps, is_valid_rle = maps.get_maps_and_mask(
+            old_camera, hr_camera, depth_map.shape[:2], hr_imshape,
+            cache=cache_maps, precomp_undist_maps=precomp_undist_maps,
+        )
+        new_image = cv2.remap(
+            image, remap_maps, None, image_interp,
+            borderMode=border_mode, borderValue=cv_bv, dst=image_dst,
+        )
+        new_depth = cv2.remap(
+            depth_map, remap_maps, None, depth_interp,
+            borderMode=cv2.BORDER_CONSTANT, borderValue=np.nan,
+        )
+
+    if new_image.ndim < image.ndim:
+        new_image = np.expand_dims(new_image, -1)
+
+    # Z-correction for depth when rotation changes
+    if not same_rotation:
+        z_factors = maps_impl.make_z_factors(
+            hr_imshape[0], hr_imshape[1],
+            old_camera, hr_camera, precomp_undist_maps,
+        )
+        _apply_depth_z_correction(new_depth, z_factors)
+
+    # Apply validity mask
+    if is_valid_rle is None:
+        is_valid_rle = validity.get_valid_mask_reproj(
+            old_camera, hr_camera, imshape_old=depth_map.shape[:2], imshape_new=hr_imshape,
+        )
+    is_valid_rle.decode_into(new_image, bg_value=border_value)
+    is_valid_rle.decode_into(new_depth, bg_value=np.nan)
+
+    # Downsample from high-res
+    if a > 1:
+        oh, ow = output_imshape
+        new_image = cv2.resize(
+            new_image, dsize=(ow, oh), interpolation=cv2.INTER_AREA, dst=dst)
+        # Bilateral filter on high-res depth before block downsample
+        nan_mask = np.isnan(new_depth)
+        new_depth[nan_mask] = -1e9
+        new_depth = cv2.bilateralFilter(new_depth, d=-1, sigmaColor=0.1, sigmaSpace=a / 2)
+        new_depth[nan_mask] = np.nan
+        _block_nanmedian_inplace(new_depth, oh, a, ow)
+        new_depth = new_depth[:oh, :ow]
+        is_valid_rle = is_valid_rle.avg_pool2d_valid(
+            kernel_size=(a, a), stride=(a, a))
+
+    if use_linear_srgb:
+        new_image = encode_srgb(new_image, dst=dst)
+
+    if return_validity_mask:
+        return new_image, new_depth, is_valid_rle
+    return new_image, new_depth
+
+
 def reproject_image_aliased(
     image: np.ndarray,
     old_camera: "Camera",
@@ -195,34 +449,37 @@ def reproject_image_aliased(
         interp = cv2.INTER_LINEAR
 
     if not np.allclose(old_camera.t, new_camera.t):
-        raise Exception(
+        raise ValueError(
             "The optical center of the camera must not change, else warping is not enough!"
         )
 
-    if not cache_maps and not old_camera.has_distortion() and not new_camera.has_distortion():
-        # No distortion, we can use a perspective warp
-        remapped = reproject_image_fast(
-            image, old_camera, new_camera, output_imshape, border_mode, border_value, interp, dst
-        )
-        is_valid_rle = validity.get_valid_mask_reproj(
-            old_camera, new_camera, imshape_old=image.shape[:2], imshape_new=output_imshape
-        )
-        mask_image_by_rle(remapped, ~is_valid_rle, border_value)
-        return remapped, is_valid_rle
+    n_channels = image.shape[2] if image.ndim == 3 else 1
+    cv_bv = _cv_border_value(border_value, n_channels)
 
     if (
         not cache_maps
         and np.allclose(new_camera.R, old_camera.R)
         and new_camera._distortion_model == old_camera._distortion_model
     ):
-        # Only the intrinsics have changed we can use an affine warp
+        # Only the intrinsics have changed, we can use an affine warp
         remapped = reproject_image_affine(
-            image, old_camera, new_camera, output_imshape, border_mode, border_value, interp, dst
+            image, old_camera, new_camera, output_imshape, border_mode, cv_bv, interp, dst
         )
         is_valid_rle = validity.get_valid_mask_reproj(
             old_camera, new_camera, imshape_old=image.shape[:2], imshape_new=output_imshape
         )
-        mask_image_by_rle(remapped, ~is_valid_rle, border_value)
+        is_valid_rle.decode_into(remapped, bg_value=border_value)
+        return remapped, is_valid_rle
+
+    if not cache_maps and not old_camera.has_distortion() and not new_camera.has_distortion():
+        # No distortion, we can use a perspective warp
+        remapped = reproject_image_fast(
+            image, old_camera, new_camera, output_imshape, border_mode, cv_bv, interp, dst
+        )
+        is_valid_rle = validity.get_valid_mask_reproj(
+            old_camera, new_camera, imshape_old=image.shape[:2], imshape_new=output_imshape
+        )
+        is_valid_rle.decode_into(remapped, bg_value=border_value)
         return remapped, is_valid_rle
 
     remap_maps, is_valid_rle = maps.get_maps_and_mask(
@@ -233,50 +490,14 @@ def reproject_image_aliased(
         cache=cache_maps,
         precomp_undist_maps=precomp_undist_maps,
     )
+    # No need to apply is_valid_rle here: cv2.remap already fills out-of-bounds pixels
+    # with border_value, and the maps encode distortion invalidity as NaN.
     remapped = cv2.remap(
-        image, remap_maps, None, interp, borderMode=border_mode, borderValue=border_value, dst=dst
+        image, remap_maps, None, interp, borderMode=border_mode, borderValue=cv_bv, dst=dst
     )
     if remapped.ndim < image.ndim:
         remapped = np.expand_dims(remapped, -1)
     return remapped, is_valid_rle
-
-
-@numba.njit(error_model='numpy', cache=True)
-def _mask_flat_by_rle(values, rle_counts, value):
-    r = 0
-    for i_count, cnt in enumerate(rle_counts):
-        end = r + cnt
-        if i_count % 2 == 1:
-            values[r:end] = value
-        r = end
-
-
-@numba.njit(error_model='numpy', cache=True)
-def _mask_image_by_rle(im, rle_counts, value):
-    r = 0
-    for i_count, cnt in enumerate(rle_counts):
-        if i_count % 2 == 1:
-            for _ in range(cnt):
-                i = r % im.shape[0]
-                j = r // im.shape[0]
-                im[i, j] = value
-                r += 1
-        else:
-            r += cnt
-
-
-def mask_image_by_rle(im, rle, value):
-    """All foreground pixels of image `im` are set to `value`."""
-    if im.flags.c_contiguous:
-        values = im.reshape(-1)
-        n_channels = im.shape[-1] if im.ndim == 3 else 1
-        transposed_counts = rle.transpose().counts
-        _mask_flat_by_rle(values, transposed_counts * np.int32(n_channels), value)
-    elif im.ndim == 2 and im.flags.f_contiguous:
-        values = im.reshape(-1, order="F")
-        _mask_flat_by_rle(values, rle.counts, value)
-    else:
-        _mask_image_by_rle(im, rle.counts, value)
 
 
 def reproject_box(old_box, old_camera, new_camera):
@@ -344,13 +565,14 @@ def reproject_image_fast(
     if border_value is None:
         border_value = 0
 
+    n_channels = image.shape[2] if image.ndim == 3 else 1
     remapped = cv2.warpPerspective(
         image,
         homography,
         (output_imshape[1], output_imshape[0]),
         flags=interp | cv2.WARP_INVERSE_MAP,
         borderMode=border_mode,
-        borderValue=border_value,
+        borderValue=_cv_border_value(border_value, n_channels),
         dst=dst,
     )
 
@@ -373,13 +595,14 @@ def reproject_image_affine(
     K_new = new_camera.intrinsic_matrix
     K_old = old_camera.intrinsic_matrix
     affine_mat_2x3 = coordframes.relative_intrinsics(K_new, K_old)[:2]
+    n_channels = image.shape[2] if image.ndim == 3 else 1
     remapped = cv2.warpAffine(
         image,
         affine_mat_2x3,
         (output_imshape[1], output_imshape[0]),
         flags=cv2.WARP_INVERSE_MAP | interp,
         borderMode=border_mode,
-        borderValue=border_value,
+        borderValue=_cv_border_value(border_value, n_channels),
         dst=dst,
     )
     if remapped.ndim < image.ndim:
@@ -502,7 +725,7 @@ def reproject_rle_mask(
         return _reproject_rle_mask_in_rle(rle_mask, old_camera, new_camera, dst_shape)
     else:
         cropped_rle, bbox = rle_mask.tight_crop()
-        old_camera_shifted = old_camera.shift_image(-bbox[:2], inplace=False)
+        old_camera_shifted = old_camera.image_shifted(-bbox[:2])
         mask = cropped_rle.to_array(255, order='C')
         new_mask = reproject_image(
             mask,
@@ -517,7 +740,7 @@ def reproject_rle_mask(
             use_linear_srgb=False,
         )
         return rlemasklib.RLEMask.from_array(
-            new_mask, thresh128=True, is_sparse=rle_mask.density < 0.04
+            new_mask, threshold=128, is_sparse=rle_mask.density < 0.04
         )
 
 
@@ -643,3 +866,73 @@ def decode_srgb(im, dst=None):
         raise ValueError("The input and destination arrays must have the same size")
 
     return LUT(im, get_srgb_decoder_lut(), dst)
+
+
+def _cv_border_value(border_value, n_channels):
+    """Normalize border_value for OpenCV functions that need per-channel tuples."""
+    if np.ndim(border_value) == 0 and n_channels > 1:
+        return (int(border_value),) * n_channels
+    return border_value
+
+
+def _resolve_output_imshape(output_imshape, new_camera, param_name="output_imshape"):
+    """Resolve output image shape from parameter or camera.image_shape.
+
+    Emits deprecation warning if explicit parameter is provided.
+    """
+    if output_imshape is not None:
+        warnings.warn(
+            f"{param_name} parameter is deprecated. Set new_camera.image_shape instead.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        return output_imshape
+    elif new_camera.image_shape is not None:
+        return new_camera.image_shape
+    else:
+        raise ValueError(
+            f"Output image shape not specified. Either pass {param_name} "
+            "or set new_camera.image_shape."
+        )
+
+
+@numba.njit(error_model='numpy', cache=True)
+def _apply_depth_z_correction(depth, z_factors):
+    """Divide depth by z-factor in-place, NaN where z <= 0."""
+    for y in range(depth.shape[0]):
+        for x in range(depth.shape[1]):
+            z = z_factors[y, x]
+            if z <= 0:
+                depth[y, x] = np.nan
+            else:
+                depth[y, x] /= z
+
+
+@numba.njit(error_model='numpy', cache=True)
+def _block_nanmedian_inplace(arr, oh, a, ow):
+    """Block-reduce by nanmedian in-place, writing into the top-left oh x ow corner of arr."""
+    buf = np.empty(a * a, dtype=np.float32)
+    for y in range(oh):
+        for x in range(ow):
+            n = 0
+            for dy in range(a):
+                for dx in range(a):
+                    v = arr[y * a + dy, x * a + dx]
+                    if not np.isnan(v):
+                        buf[n] = v
+                        n += 1
+            if n == 0:
+                arr[y, x] = np.nan
+            else:
+                # insertion sort (block is tiny, typically 4-16 elements)
+                for i in range(1, n):
+                    key = buf[i]
+                    j = i - 1
+                    while j >= 0 and buf[j] > key:
+                        buf[j + 1] = buf[j]
+                        j -= 1
+                    buf[j + 1] = key
+                # Lower median to avoid creating synthetic depth values at edges
+                arr[y, x] = buf[(n - 1) // 2]
+
+

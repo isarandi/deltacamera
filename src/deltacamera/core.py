@@ -1384,6 +1384,11 @@ def visible_subbox(old_camera, new_camera, old_imshape, new_box):
     valid_poly = validity.get_valid_poly_reproj(
         old_camera, new_camera, old_imshape[:2], None
     )
+    if valid_poly.is_empty:
+        return np.array([new_box[0], new_box[1], 0, 0], np.float32)
     s_box = shapely.Polygon.from_bounds(*new_box[:2], *(new_box[:2] + new_box[2:]))
-    minx, miny, maxx, maxy = valid_poly.intersection(s_box).bounds
+    intersection = valid_poly.intersection(s_box)
+    if intersection.is_empty:
+        return np.array([new_box[0], new_box[1], 0, 0], np.float32)
+    minx, miny, maxx, maxy = intersection.bounds
     return np.array([minx, miny, maxx - minx, maxy - miny], np.float32)

@@ -662,7 +662,7 @@ def clean_up_polygon(geom):
         if len(polys) == 1:
             return polys[0]
         return MultiPolygon(polys)
-    return None
+    return Polygon()
 
 
 def get_valid_poly(camera: "Camera", imshape=None):
@@ -743,7 +743,7 @@ def get_valid_poly_reproj(old_camera, new_camera, imshape_old=None, imshape_new=
     if np.allclose(new_camera.R, old_camera.R) and (
         new_camera._distortion_model == old_camera._distortion_model
     ):
-        return get_valid_poly_reproj_affine(
+        return _get_valid_poly_reproj_affine(
             old_camera, new_camera, effective_imshape_old, effective_imshape_new
         )
 
@@ -812,15 +812,20 @@ def get_valid_poly_reproj(old_camera, new_camera, imshape_old=None, imshape_new=
 def get_valid_poly_reproj_affine(old_camera, new_camera, imshape_old=None, imshape_new=None):
     """Get valid region polygon for affine reprojection (same rotation + distortion).
 
-    Note: This is typically called from get_valid_poly_reproj when rotation and
-    distortion are the same. If called directly with explicit imshape parameters,
-    a deprecation warning will be issued.
+    Args:
+        old_camera: Source camera.
+        new_camera: Target camera.
+        imshape_old: DEPRECATED. Use old_camera.image_shape instead.
+        imshape_new: DEPRECATED. Use new_camera.image_shape instead.
     """
-    # Note: This function may be called internally with already-resolved shapes,
-    # or directly by user with deprecated parameters. Handle both cases.
     effective_imshape_old = _resolve_imshape(imshape_old, old_camera, "imshape_old")
     effective_imshape_new = _resolve_imshape(imshape_new, new_camera, "imshape_new")
+    return _get_valid_poly_reproj_affine(
+        old_camera, new_camera, effective_imshape_old, effective_imshape_new
+    )
 
+
+def _get_valid_poly_reproj_affine(old_camera, new_camera, effective_imshape_old, effective_imshape_new):
     if old_camera.has_distortion():
         _, pn = get_valid_distortion_region(old_camera)
         sn = shapely.Polygon(pn)
@@ -1098,13 +1103,10 @@ def get_optimal_undistorted_intrinsics(
         Tuple of (new_intrinsic_matrix, crop_box, valid_polygon).
     """
     # Create undistorted camera with square pixels and no skew
-    new_camera = old_camera.copy()
-    new_camera.distortion_coeffs = None
-    new_camera.square_pixels()
-    new_camera.intrinsic_matrix[0, 1] = 0
+    new_camera = old_camera.undistorted(square_pixels=True, zero_skew=True)
 
     # Get valid region polygon and its bounding box (outer_box)
-    valid_poly: shapely.Polygon = validity.get_valid_poly_reproj(
+    valid_poly: shapely.Polygon = get_valid_poly_reproj(
         old_camera, new_camera, old_imshape, imshape_new=None
     )
     x1, y1, x2, y2 = valid_poly.bounds
@@ -1162,11 +1164,11 @@ def get_optimal_undistorted_intrinsics(
     # Scale to target resolution
     factor = new_imshape[1] / box[2] if new_imshape is not None else 1
     intr_before_shift = new_camera.intrinsic_matrix.copy()
-    new_camera.shift_image(-box[:2])
+    new_camera = new_camera.image_shifted(-box[:2])
     if new_imshape is not None:
-        new_camera.scale_output(factor)
+        new_camera = new_camera.image_scaled(factor)
         if center_principal_point:
-            new_camera.center_principal_point(new_imshape)
+            new_camera = new_camera.copy(image_shape=new_imshape).principal_point_centered()
 
     # Transform boxes and polygon to final output coordinates
     shift = new_camera.intrinsic_matrix[:2, 2] - factor * intr_before_shift[:2, 2]
