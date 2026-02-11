@@ -1392,3 +1392,21 @@ def visible_subbox(old_camera, new_camera, old_imshape, new_box):
         return np.array([new_box[0], new_box[1], 0, 0], np.float32)
     minx, miny, maxx, maxy = intersection.bounds
     return np.array([minx, miny, maxx - minx, maxy - miny], np.float32)
+
+
+def transform_points(points, old_camera, new_camera):
+    """Transform 3D points from one camera's coordinate frame to another's.
+
+    Args:
+        points: 3D points in old_camera's coordinate frame, shape (..., 3).
+        old_camera: The camera whose coordinate frame the points are currently in.
+        new_camera: The camera whose coordinate frame the points should be transformed to.
+
+    Returns:
+        The points in new_camera's coordinate frame, shape (..., 3).
+    """
+    points = np.asarray(points, dtype=np.float32)
+    orig_shape = points.shape
+    flat = points.reshape(-1, 3)
+    result = coordframes.camera_to_camera(flat, old_camera.R, old_camera.t, new_camera.R, new_camera.t)
+    return result.reshape(orig_shape)

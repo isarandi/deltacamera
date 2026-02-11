@@ -343,6 +343,26 @@ def camera_to_world(points, R, camloc, dst):
 
 
 @numba.njit(error_model='numpy', cache=True)
+def camera_to_camera(points, R_old, camloc_old, R_new, camloc_new):
+    # cam_new = R_new @ (R_old^T @ cam_old + camloc_old - camloc_new)
+    #         = R_rel @ cam_old + t_offset
+    R_rel = R_new @ R_old.T
+    diff = camloc_old - camloc_new
+    t0 = R_new[0, 0] * diff[0] + R_new[0, 1] * diff[1] + R_new[0, 2] * diff[2]
+    t1 = R_new[1, 0] * diff[0] + R_new[1, 1] * diff[1] + R_new[1, 2] * diff[2]
+    t2 = R_new[2, 0] * diff[0] + R_new[2, 1] * diff[1] + R_new[2, 2] * diff[2]
+    R00, R01, R02, R10, R11, R12, R20, R21, R22 = R_rel.flat
+    n_points = points.shape[0]
+    out = np.empty((n_points, 3), dtype=points.dtype)
+    for i in numba.prange(n_points):
+        in_x, in_y, in_z = points[i]
+        out[i, 0] = R00 * in_x + R01 * in_y + R02 * in_z + t0
+        out[i, 1] = R10 * in_x + R11 * in_y + R12 * in_z + t1
+        out[i, 2] = R20 * in_x + R21 * in_y + R22 * in_z + t2
+    return out
+
+
+@numba.njit(error_model='numpy', cache=True)
 def mul_K_M_Kinv(K1, M, K2):
     # Computes K1 @ M @ inv(K2)
     return mul_M_K_inv(get_projection_matrix3x3(K1, M), K2)
