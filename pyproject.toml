@@ -49,7 +49,7 @@ dependencies = [
     "shapely",
     "msgpack-numpy",
     "boxlib",
-    "rlemasklib",
+    "rlemasklib>=0.7.0",
 ]
 
 [project.optional-dependencies]
