@@ -176,7 +176,7 @@ def reproject_depth_map(
         depth_map: Input depth map (float32), where values are Z in old camera space.
         old_camera: The camera that captured `depth_map`.
         new_camera: The target camera.
-        output_imshape: (height, width) for the output. Deprecated; set new_camera.image_shape.
+        output_imshape: Deprecated. Use new_camera.copy(image_shape=...) instead.
         interp: OpenCV interpolation mode. Default: cv2.INTER_NEAREST.
         antialias_factor: Supersample factor. Depth is rendered at this multiple of the
             output resolution, then block-downsampled with nanmedian.
@@ -882,7 +882,10 @@ def _resolve_output_imshape(output_imshape, new_camera, param_name="output_imsha
     """
     if output_imshape is not None:
         warnings.warn(
-            f"{param_name} parameter is deprecated. Set new_camera.image_shape instead.",
+            f"{param_name} parameter is deprecated. "
+            "The output image shape is now deduced from new_camera.image_shape, "
+            "which can be set in the Camera constructor or via the copy method, "
+            "e.g. new_camera.copy(image_shape=...).",
             DeprecationWarning,
             stacklevel=3,
         )
@@ -892,7 +895,7 @@ def _resolve_output_imshape(output_imshape, new_camera, param_name="output_imsha
     else:
         raise ValueError(
             f"Output image shape not specified. Either pass {param_name} "
-            "or set new_camera.image_shape."
+            "or provide image_shape when constructing new_camera."
         )
 
 
