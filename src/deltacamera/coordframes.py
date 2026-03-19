@@ -14,9 +14,8 @@ def project(points, dst):
             dst[i, 0] = np.nan
             dst[i, 1] = np.nan
         else:
-            inv_z = np.float32(1) / z
-            dst[i, 0] = points[i, 0] * inv_z
-            dst[i, 1] = points[i, 1] * inv_z
+            dst[i, 0] = points[i, 0] / z
+            dst[i, 1] = points[i, 1] / z
     return dst
 
 
@@ -166,9 +165,8 @@ def project_and_apply_intrinsics(points, K, dst):
             dst[i, 0] = _nan
             dst[i, 1] = _nan
         else:
-            inv_z = _1 / z
-            dst[i, 0] = K00 * points[i, 0] * inv_z + K01 * points[i, 1] * inv_z + K02
-            dst[i, 1] = K11 * points[i, 1] * inv_z + K12
+            dst[i, 0] = (K00 * points[i, 0] + K01 * points[i, 1]) / z + K02
+            dst[i, 1] = K11 * points[i, 1] / z + K12
     return dst
 
 
