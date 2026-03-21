@@ -48,9 +48,47 @@ Basic Usage
    # Remove lens distortion
    undistorted_cam = cam.undistorted()
 
+Image Reprojection
+~~~~~~~~~~~~~~~~~~
+
+Reproject an image from one camera to another (e.g., to undistort or change the
+virtual viewing direction):
+
+.. code-block:: python
+
+   import numpy as np
+   from deltacamera import Camera, reproject_image
+
+   # A camera with Brown-Conrady distortion
+   cam = Camera(
+       intrinsic_matrix=np.array([[500, 0, 320], [0, 500, 240], [0, 0, 1]]),
+       distortion_coeffs=[-0.3, 0.1, 0, 0, 0],
+       image_shape=(480, 640))
+
+   # Undistort: create a pinhole version and warp the image
+   cam_undist = cam.undistorted()
+   undistorted_image = reproject_image(image, cam, cam_undist)
+
+   # Rotate the virtual camera and reproject
+   cam_rotated = cam.turned_towards(target_image_point=[100, 200])
+   cam_rotated = cam_rotated.undistorted()
+   cam_rotated = cam_rotated.copy(image_shape=(256, 256))
+   crop = reproject_image(image, cam, cam_rotated)
+
+Point Reprojection
+~~~~~~~~~~~~~~~~~~
+
+Transform 2D points (e.g., keypoints, bounding box corners) between cameras:
+
+.. code-block:: python
+
+   from deltacamera import reproject_image_points
+
+   # Reproject keypoints from the original camera to the undistorted one
+   new_points = reproject_image_points(old_points, cam, cam_undist)
+
 .. toctree::
    :maxdepth: 2
    :hidden:
 
-   api/index
-   explanation/index
+   API Reference <api/deltacamera/index>

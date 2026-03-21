@@ -1,9 +1,13 @@
 """Sphinx configuration for deltacamera documentation."""
 
+import contextlib
 import importlib
+import inspect
 import os
 import re
 import sys
+import types
+from enum import Enum
 
 import setuptools_scm
 import toml
@@ -32,11 +36,15 @@ project = project_info["name"]
 release = setuptools_scm.get_version("..")
 version = ".".join(release.split(".")[:2])
 main_module_name = project_slug.replace("-", "_")
+repo_name = project_slug
+module = importlib.import_module(main_module_name)
+globals()[main_module_name] = module
 
 # -- Project information -----------------------------------------------------
+linkcode_url = repo_url
 
 author = project_info["authors"][0]["name"]
-copyright = "2024"
+copyright = "2024-%Y"
 
 # -- General configuration ---------------------------------------------------
 
@@ -48,11 +56,12 @@ extensions = [
     "sphinx.ext.napoleon",
     "sphinx.ext.autosummary",
     "sphinx.ext.intersphinx",
-    "sphinx.ext.viewcode",
+    "sphinx.ext.linkcode",
+    "sphinx.ext.autodoc.typehints",
     "sphinxcontrib.bibtex",
     "autoapi.extension",
-    "sphinx_markdown_builder",
     "sphinx.ext.inheritance_diagram",
+    "sphinx_codeautolink",
 ]
 
 bibtex_bibfiles = ["abbrev_long.bib", "references.bib"]
@@ -61,11 +70,16 @@ bibtex_footbibliography_header = ".. rubric:: References"
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
     "numpy": ("https://numpy.org/doc/stable/", None),
-    "scipy": ("https://docs.scipy.org/doc/scipy/reference/", None),
+    "scipy": ("https://docs.scipy.org/doc/scipy/", None),
 }
 
+github_username = github_username
+github_repository = repo_name
+autodoc_show_sourcelink = False
+html_show_sourcelink = False
+
 templates_path = ["_templates"]
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "howto", "explanation"]
 
 # -- HTML output -------------------------------------------------------------
 
@@ -73,9 +87,6 @@ html_title = project
 html_theme = "pydata_sphinx_theme"
 html_theme_options = {
     "show_toc_level": 3,
-    "navbar_start": ["navbar-logo"],
-    "navbar_center": ["navbar-nav"],
-    "primary_sidebar_end": [],
     "icon_links": [
         {
             "name": "GitHub",
@@ -84,7 +95,6 @@ html_theme_options = {
             "type": "fontawesome",
         }
     ],
-    "navigation_with_keys": False,
 }
 html_static_path = ["_static"]
 html_css_files = ["styles/my_theme.css"]
@@ -99,7 +109,7 @@ html_context = {
 autoapi_root = "api"
 autoapi_member_order = "bysource"
 autodoc_typehints = "description"
-autoapi_own_page_level = "class"
+autoapi_own_page_level = "attribute"
 autoapi_type = "python"
 
 autodoc_default_options = {
@@ -110,7 +120,7 @@ autodoc_default_options = {
 }
 
 autoapi_options = ["members", "show-inheritance", "special-members", "show-module-summary"]
-autoapi_add_toctree_entry = True
+autoapi_add_toctree_entry = False
 autoapi_dirs = ["../src"]
 autoapi_template_dir = "_templates/autoapi"
 
@@ -127,20 +137,130 @@ python_display_short_literal_types = True
 # -- Skip undocumented members -----------------------------------------------
 
 
+_hidden_modules = {
+    "deltacamera.distortion_models",
+    "deltacamera.intrinsics",
+    "deltacamera.inverse_distortion",
+    "deltacamera.largest_interior_rectangle",
+    "deltacamera.vanishing_point_gui",
+}
+
+
 def autodoc_skip_member(app, what, name, obj, skip, options):
-    """Skip members (functions, classes, modules) without docstrings."""
-    # Check if the object has a docstring
+    """Skip members without docstrings or from undocumented modules."""
+    # Hide specific internal modules and their members
+    if what == "module" and name in _hidden_modules:
+        return True
+    if any(name.startswith(m + ".") for m in _hidden_modules):
+        return True
     if not getattr(obj, "docstring", None):
         return True
     elif what in ("class", "function", "attribute"):
-        # Check if the module of the class has a docstring
         module_name = ".".join(name.split(".")[:-1])
         try:
-            module = importlib.import_module(module_name)
-            return not getattr(module, "__doc__", None)
+            mod = importlib.import_module(module_name)
+            if not getattr(mod, "__doc__", None):
+                return True  # Module has no docstring, skip its members
         except ModuleNotFoundError:
             return None
+        # For private names, defer to AutoAPI default (which skips them).
+        # For public names, force-include (overrides the imported-members default).
+        short_name = name.split(".")[-1]
+        if short_name.startswith("_") and not short_name.startswith("__"):
+            return None
+        return False
     return skip
+
+
+def linkcode_resolve(domain, info):
+    if domain != "py":
+        return None
+
+    fullname = info["fullname"]
+    try:
+        file, start, end = get_line_numbers(eval(fullname))
+    except AttributeError:
+        # Instance attribute (dataclass field or self.x = ... in __init__)
+        parts = fullname.rsplit(".", 1)
+        if len(parts) != 2:
+            return None
+        try:
+            file, start, end = get_attr_line_numbers(eval(parts[0]), parts[1])
+        except Exception:
+            return None
+    except Exception as e:
+        print(f"linkcode_resolve failed: {info} — {e}")
+        return None
+
+    relpath = os.path.relpath(file, os.path.dirname(module.__file__))
+    return f"{repo_url}/blob/v{release}/src/{main_module_name}/{relpath}#L{start}-L{end}"
+
+
+def get_line_numbers(obj):
+    if isinstance(obj, property):
+        obj = obj.fget
+
+    if isinstance(obj, Enum):
+        return get_enum_member_line_numbers(obj)
+
+    if inspect.ismemberdescriptor(obj):
+        return get_member_line_numbers(obj)
+
+    with module_restored(obj):
+        lines = inspect.getsourcelines(obj)
+        file = inspect.getsourcefile(obj)
+
+    start, end = lines[1], lines[1] + len(lines[0]) - 1
+    return file, start, end
+
+
+def get_attr_line_numbers(class_, attr_name):
+    with module_restored(class_):
+        source_lines, start_line = inspect.getsourcelines(class_)
+        for i, line in enumerate(source_lines):
+            stripped = line.strip()
+            if (stripped.startswith(f"{attr_name}:")
+                    or stripped.startswith(f"{attr_name} :")
+                    or f"self.{attr_name} =" in stripped
+                    or f"self.{attr_name}=" in stripped):
+                return inspect.getsourcefile(class_), start_line + i, start_line + i
+        else:
+            raise ValueError(f"Attribute {attr_name} not found in {class_}")
+
+
+def get_enum_member_line_numbers(obj):
+    class_ = obj.__class__
+    with module_restored(class_):
+        source_lines, start_line = inspect.getsourcelines(class_)
+
+        for i, line in enumerate(source_lines):
+            if f"{obj.name} =" in line:
+                return inspect.getsourcefile(class_), start_line + i, start_line + i
+        else:
+            raise ValueError(f"Enum member {obj.name} not found in {class_}")
+
+
+def get_member_line_numbers(obj: types.MemberDescriptorType):
+    class_ = obj.__objclass__
+    with module_restored(class_):
+        source_lines, start_line = inspect.getsourcelines(class_)
+
+        for i, line in enumerate(source_lines):
+            if f"{obj.__name__} = " in line:
+                return inspect.getsourcefile(class_), start_line + i, start_line + i
+        else:
+            raise ValueError(f"Member {obj.__name__} not found in {class_}")
+
+
+@contextlib.contextmanager
+def module_restored(obj):
+    if not hasattr(obj, "_module_original_"):
+        yield
+    else:
+        fake_module = obj.__module__
+        obj.__module__ = obj._module_original_
+        yield
+        obj.__module__ = fake_module
 
 
 def setup(app):
