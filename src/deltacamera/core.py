@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import Optional, Sequence, TYPE_CHECKING, Union
 import warnings
 
@@ -8,13 +10,13 @@ from scipy.spatial.transform import Rotation
 
 from . import coordframes, distortion, validity
 from .decorators import DeprecatingArray, camera_transform, point_transform
-from .distortion_models import (
-    BrownConradyEx,
-    FisheyeKannalaBrandt,
-    LensDistortionModel,
-    infer_distortion_model,
-)
+from . import distortion_models as _dm
 from .util import allclose_or_nones, equal_or_nones, unit_vec
+
+if TYPE_CHECKING:
+    from deltacamera import LensDistortionModel
+else:
+    from .distortion_models import LensDistortionModel
 
 _UNSET = object()
 
@@ -101,7 +103,7 @@ class Camera:
                 DeprecationWarning,
                 stacklevel=2,
             )
-            self._distortion_model = infer_distortion_model(distortion_coeffs)
+            self._distortion_model = _dm.infer_distortion_model(distortion_coeffs)
         else:
             self._distortion_model = distortion_model
 
@@ -445,7 +447,7 @@ class Camera:
             coeffs[[[3], [2]]] = R_ @ coeffs[[[3], [2]]]
             if coeffs.shape[0] > 8:
                 coeffs[[[8, 9], [10, 11]]] = R_ @ coeffs[[[8, 9], [10, 11]]]
-            self._distortion_model = BrownConradyEx(coeffs)
+            self._distortion_model = _dm.BrownConradyEx(coeffs)
 
         self.R[:2] = R_ @ self.R[:2]
 
@@ -465,11 +467,11 @@ class Camera:
 
     def has_fisheye_distortion(self):
         """Check if the camera has fisheye (Kannala-Brandt) distortion."""
-        return isinstance(self._distortion_model, FisheyeKannalaBrandt)
+        return isinstance(self._distortion_model, _dm.FisheyeKannalaBrandt)
 
     def has_nonfisheye_distortion(self):
         """Check if the camera has non-fisheye (Brown-Conrady) distortion."""
-        return isinstance(self._distortion_model, BrownConradyEx)
+        return isinstance(self._distortion_model, _dm.BrownConradyEx)
 
     def get_pitch_roll(self):
         yaw, pitch, roll = Rotation.from_matrix(self.R).as_euler("YXZ").astype(np.float32)
@@ -603,7 +605,7 @@ class Camera:
                 coeffs[[8, 9]] *= -1  # s1, s2
             if len(coeffs) >= 14:
                 coeffs[13] *= -1  # tau_y
-            self._distortion_model = BrownConradyEx(coeffs)
+            self._distortion_model = _dm.BrownConradyEx(coeffs)
 
     @camera_transform
     def center_principal_point(self, imshape):
@@ -741,7 +743,7 @@ class Camera:
             DeprecationWarning,
             stacklevel=2,
         )
-        self._distortion_model = infer_distortion_model(value)
+        self._distortion_model = _dm.infer_distortion_model(value)
 
     @property
     def image_shape(self) -> Optional[tuple]:
@@ -820,7 +822,7 @@ class Camera:
 
         # Handle legacy pickles that have distortion_coeffs instead of _distortion_model
         if "distortion_coeffs" in self.__dict__ and "_distortion_model" not in self.__dict__:
-            self._distortion_model = infer_distortion_model(self.__dict__.pop("distortion_coeffs"))
+            self._distortion_model = _dm.infer_distortion_model(self.__dict__.pop("distortion_coeffs"))
 
         # Handle legacy pickles without _image_shape
         if "_image_shape" not in self.__dict__:
@@ -1160,14 +1162,14 @@ class Camera:
         if self._image_shape is None:
             raise ValueError("image_shape must be set for image_hflipped")
 
-        if isinstance(self._distortion_model, BrownConradyEx):
-            new_R, new_K, new_coeffs = BrownConradyEx.transform_for_hflip(
+        if isinstance(self._distortion_model, _dm.BrownConradyEx):
+            new_R, new_K, new_coeffs = _dm.BrownConradyEx.transform_for_hflip(
                 self.R, self.intrinsic_matrix, self._distortion_model.coeffs, self._image_shape
             )
             return self.copy(
                 rot_world_to_cam=new_R,
                 intrinsic_matrix=new_K,
-                distortion_model=BrownConradyEx(new_coeffs),
+                distortion_model=_dm.BrownConradyEx(new_coeffs),
             )
         else:
             # Fisheye or no distortion: just flip R and K
@@ -1195,14 +1197,14 @@ class Camera:
         else:
             anchor = np.asarray(anchor, dtype=np.float32)
 
-        if isinstance(self._distortion_model, BrownConradyEx):
-            new_R, new_K, new_coeffs = BrownConradyEx.transform_for_rotation(
+        if isinstance(self._distortion_model, _dm.BrownConradyEx):
+            new_R, new_K, new_coeffs = _dm.BrownConradyEx.transform_for_rotation(
                 self.R, self.intrinsic_matrix, self._distortion_model.coeffs, angle, anchor
             )
             return self.copy(
                 rot_world_to_cam=new_R,
                 intrinsic_matrix=new_K,
-                distortion_model=BrownConradyEx(new_coeffs),
+                distortion_model=_dm.BrownConradyEx(new_coeffs),
             )
         else:
             # Fisheye or no distortion: simple rotation
