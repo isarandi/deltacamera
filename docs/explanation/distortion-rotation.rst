@@ -1,5 +1,5 @@
 Distortion and In-Plane Image Rotation
-=============================
+=======================================
 
 When we rotate an image in software, and we care about the camera calibration as metadata, we also have to transform the calibration data in accordance with the image rotation. So we want a new camera such that projecting through the
 new camera gives the same result as projecting through the original camera and
@@ -8,7 +8,7 @@ then rotating the resulting pixel coordinates.
 This page derives the transformation rules for distortion coefficients.
 
 Problem formulation
------------
+-------------------
 
 We have a camera with intrinsic matrix :math:`K`, rotation :math:`R`, and
 distortion coefficients :math:`d`. We rotate the image by angle :math:`\theta` (in-plane).

@@ -29,6 +29,7 @@ The 1D problem (largest rectangle in a histogram) is solved with a monotonic sta
 in O(n) time. The stack maintains column indices in increasing order of height.
 
 For each column j:
+
 - If heights[j] >= stack top's height, push j onto the stack.
 - Otherwise, pop from the stack. The popped column had a certain height h.
   The rectangle with height h extends from just after the new stack top

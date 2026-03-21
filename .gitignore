@@ -60,6 +60,8 @@ venv.bak/
 
 # Sphinx documentation
 docs/_build/
+docs/howto/
+docs/explanation/
 
 # mypy
 .mypy_cache/
