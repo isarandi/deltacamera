@@ -74,11 +74,14 @@ docs = [
     "setuptools-scm",
     "toml",
 ]
+pt = [
+    "torch>=2.0",
+]
 gui = [
     "PyQt6>=6.5.0",
 ]
 dev = [
-    "deltacamera[test,lint,docs]",
+    "deltacamera[test,lint,docs,pt]",
 ]
 
 [project.urls]
