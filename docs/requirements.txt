@@ -1,7 +1,0 @@
-sphinx
-sphinx-autoapi
-sphinxcontrib-bibtex
-pydata-sphinx-theme
-sphinx-markdown-builder
-setuptools-scm
-toml
