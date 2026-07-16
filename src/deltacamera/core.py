@@ -491,9 +491,10 @@ class Camera:
         multiplying its coordinates by `factor`."""
         self.intrinsic_matrix[:2] *= np.expand_dims(np.float32(factor), -1)
         if self._image_shape is not None:
+            factor_x, factor_y = np.broadcast_to(np.float32(factor), (2,))
             self._image_shape = (
-                int(self._image_shape[0] * factor),
-                int(self._image_shape[1] * factor),
+                int(self._image_shape[0] * factor_y),
+                int(self._image_shape[1] * factor_x),
             )
 
     @camera_transform
