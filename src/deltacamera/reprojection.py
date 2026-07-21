@@ -96,6 +96,7 @@ def reproject_image(
     """
     output_imshape = _resolve_output_imshape(output_imshape, new_camera)
 
+    srgb_dtype = image.dtype
     if use_linear_srgb:
         image = decode_srgb(image, dst=None)
 
@@ -113,7 +114,7 @@ def reproject_image(
             precomp_undist_maps,
         )
         if use_linear_srgb:
-            result = encode_srgb(result, dst=dst)
+            result = encode_srgb(result, dst=dst, dtype=srgb_dtype)
 
         if return_validity_mask:
             return result, mask
@@ -142,7 +143,7 @@ def reproject_image(
     )
 
     if use_linear_srgb:
-        result = encode_srgb(result, dst=dst)
+        result = encode_srgb(result, dst=dst, dtype=srgb_dtype)
 
     if return_validity_mask:
         mask = highres_mask.avg_pool2d_valid(kernel_size=(a, a), stride=(a, a))
@@ -324,6 +325,7 @@ def reproject_rgbd(
             "The optical center of the camera must not change, else warping is not enough!"
         )
 
+    srgb_dtype = image.dtype
     if use_linear_srgb:
         image = decode_srgb(image, dst=None)
 
@@ -421,7 +423,7 @@ def reproject_rgbd(
             kernel_size=(a, a), stride=(a, a))
 
     if use_linear_srgb:
-        new_image = encode_srgb(new_image, dst=dst)
+        new_image = encode_srgb(new_image, dst=dst, dtype=srgb_dtype)
 
     if return_validity_mask:
         return new_image, new_depth, is_valid_rle
@@ -798,7 +800,24 @@ def get_srgb_decoder_lut():
             lut[i] = 0
         elif lut[i] > 1:
             lut[i] = 1
-    return (lut * ((1 << 16) - 1)).astype(np.uint16)
+    return (lut * ((1 << 16) - 1) + 0.5).astype(np.uint16)
+
+
+@functools.lru_cache
+@numba.njit(error_model='numpy', cache=True)
+def get_srgb_decoder_lut16():
+    lut = np.zeros(1 << 16, np.float64)
+    for i in numba.prange(1 << 16):
+        x = i / ((1 << 16) - 1)
+        if x <= 0.04045:
+            lut[i] = x / 12.92
+        else:
+            lut[i] = ((x + 0.055) / 1.055) ** 2.4
+        if lut[i] < 0:
+            lut[i] = 0
+        elif lut[i] > 1:
+            lut[i] = 1
+    return (lut * ((1 << 16) - 1) + 0.5).astype(np.uint16)
 
 
 @functools.lru_cache
@@ -815,7 +834,24 @@ def get_srgb_encoder_lut():
             lut[i] = 0
         elif lut[i] > 1:
             lut[i] = 1
-    return (lut * 255).astype(np.uint8)
+    return (lut * 255 + 0.5).astype(np.uint8)
+
+
+@functools.lru_cache
+@numba.njit(error_model='numpy', cache=True)
+def get_srgb_encoder_lut16():
+    lut = np.zeros(1 << 16, np.float64)
+    for i in numba.prange(1 << 16):
+        x = i / ((1 << 16) - 1)
+        if x <= 0.0031308:
+            lut[i] = x * 12.92
+        else:
+            lut[i] = 1.055 * x ** (1 / 2.4) - 0.055
+        if lut[i] < 0:
+            lut[i] = 0
+        elif lut[i] > 1:
+            lut[i] = 1
+    return (lut * ((1 << 16) - 1) + 0.5).astype(np.uint16)
 
 
 @numba.njit(error_model='numpy', cache=True)
@@ -828,31 +864,44 @@ def LUT(im, lut, dst):
     return out
 
 
-def encode_srgb(im, dst=None):
-    """Encodes a linear 16-bit image to 8-bit sRGB.
+def encode_srgb(im, dst=None, dtype=None):
+    """Encodes a linear 16-bit image to sRGB.
 
     Args:
         im: Input pixel values of dtype np.uint16
-        dst: Optional destination array of dtype np.uint8
+        dst: Optional destination array of dtype np.uint8 or np.uint16
+        dtype: Output dtype, np.uint8 or np.uint16. If None, inferred from ``dst``,
+            defaulting to np.uint8.
 
     Returns:
-        The sRGB encoded image of dtype np.uint8
+        The sRGB encoded image of dtype ``dtype``
     """
-    if dst is not None and dst.dtype != np.uint8:
-        raise ValueError("The destination dtype must be np.uint8")
+    if dtype is None:
+        dtype = np.uint8 if dst is None else dst.dtype
+    dtype = np.dtype(dtype)
+    if dtype not in (np.dtype(np.uint8), np.dtype(np.uint16)):
+        raise ValueError("The output dtype must be np.uint8 or np.uint16")
+    if dst is not None and dst.dtype != dtype:
+        raise ValueError("The destination dtype must match the output dtype")
     if not im.dtype == np.uint16:
         raise ValueError("The input dtype must be np.uint16")
     if dst is not None and im.size != dst.size:
         raise ValueError("The input and destination arrays must have the same size")
 
-    return LUT(im, get_srgb_encoder_lut(), dst)
+    lut = get_srgb_encoder_lut() if dtype == np.uint8 else get_srgb_encoder_lut16()
+    return LUT(im, lut, dst)
 
 
 def decode_srgb(im, dst=None):
-    """Decodes an 8-bit sRGB image to linear 16-bit.
+    """Decodes an 8-bit or 16-bit sRGB image to linear 16-bit.
+
+    For uint8 input the mapping is injective (encode_srgb recovers the input exactly).
+    For uint16 input the dark end is quantized (the decode slope 1/12.92 collapses ~13
+    adjacent encoded values per linear step), so an encode_srgb roundtrip can be off by
+    up to ~7/65535 — about 1/40 of a uint8 quantization step.
 
     Args:
-        im: Input pixel values of dtype np.uint8
+        im: Input pixel values of dtype np.uint8 or np.uint16
         dst: Optional destination array of dtype np.uint16
 
     Returns:
@@ -860,12 +909,16 @@ def decode_srgb(im, dst=None):
     """
     if dst is not None and dst.dtype != np.uint16:
         raise ValueError("The destination dtype must be np.uint16")
-    if not im.dtype == np.uint8:
-        raise ValueError("The input dtype must be np.uint8")
+    if im.dtype == np.uint8:
+        lut = get_srgb_decoder_lut()
+    elif im.dtype == np.uint16:
+        lut = get_srgb_decoder_lut16()
+    else:
+        raise ValueError("The input dtype must be np.uint8 or np.uint16")
     if dst is not None and im.size != dst.size:
         raise ValueError("The input and destination arrays must have the same size")
 
-    return LUT(im, get_srgb_decoder_lut(), dst)
+    return LUT(im, lut, dst)
 
 
 def _cv_border_value(border_value, n_channels):
