@@ -245,8 +245,8 @@ def reproject_depth_map(
         _apply_depth_z_correction(remapped, z_factors)
 
     if is_valid_rle is None:
-        is_valid_rle = validity.get_valid_mask_reproj(
-            old_camera, hr_camera, imshape_old=depth_map.shape[:2], imshape_new=hr_imshape,
+        is_valid_rle = validity._get_valid_mask_reproj(
+            old_camera, hr_camera, depth_map.shape[:2], hr_imshape
         )
     is_valid_rle.decode_into(remapped, bg_value=np.nan)
 
@@ -359,8 +359,15 @@ def reproject_rgbd(
             depth_map, affine_mat_2x3, dsize, flags=cv2.WARP_INVERSE_MAP | depth_interp,
             borderMode=cv2.BORDER_CONSTANT, borderValue=np.nan,
         )
-    elif not cache_maps and not old_camera.has_distortion() and not new_camera.has_distortion():
-        # No distortion: perspective warp
+    elif (
+        not cache_maps
+        and not old_camera.has_distortion()
+        and not new_camera.has_distortion()
+        and border_mode == cv2.BORDER_CONSTANT
+    ):
+        # No distortion: perspective warp. Constant borders only, since the behind-camera
+        # region wrapped into the image by warpPerspective must be overwritten below,
+        # which would clobber the border content of other border modes.
         homography = coordframes.mul_K_M_Kinv(
             old_camera.intrinsic_matrix, old_camera.R @ hr_camera.R.T,
             hr_camera.intrinsic_matrix,
@@ -399,12 +406,14 @@ def reproject_rgbd(
         )
         _apply_depth_z_correction(new_depth, z_factors)
 
-    # Apply validity mask
+    # Apply validity mask (the image only for constant borders — replicate/reflect/wrap
+    # content produced by the warp must be kept; depth always uses NaN as border)
     if is_valid_rle is None:
-        is_valid_rle = validity.get_valid_mask_reproj(
-            old_camera, hr_camera, imshape_old=depth_map.shape[:2], imshape_new=hr_imshape,
+        is_valid_rle = validity._get_valid_mask_reproj(
+            old_camera, hr_camera, depth_map.shape[:2], hr_imshape
         )
-    is_valid_rle.decode_into(new_image, bg_value=border_value)
+    if border_mode == cv2.BORDER_CONSTANT:
+        is_valid_rle.decode_into(new_image, bg_value=border_value)
     is_valid_rle.decode_into(new_depth, bg_value=np.nan)
 
     # Downsample from high-res
@@ -464,22 +473,34 @@ def reproject_image_aliased(
         and new_camera._distortion_model == old_camera._distortion_model
     ):
         # Only the intrinsics have changed, we can use an affine warp
-        remapped = reproject_image_affine(
+        remapped = _reproject_image_affine(
             image, old_camera, new_camera, output_imshape, border_mode, cv_bv, interp, dst
         )
-        is_valid_rle = validity.get_valid_mask_reproj(
-            old_camera, new_camera, imshape_old=image.shape[:2], imshape_new=output_imshape
+        is_valid_rle = validity._get_valid_mask_reproj(
+            old_camera, new_camera, image.shape[:2], output_imshape
         )
-        is_valid_rle.decode_into(remapped, bg_value=border_value)
+        # Only stamp border_value outside the valid region for constant borders; for
+        # replicate/reflect/wrap the border content produced by warpAffine must be kept,
+        # matching the general remap path.
+        if border_mode == cv2.BORDER_CONSTANT:
+            is_valid_rle.decode_into(remapped, bg_value=border_value)
         return remapped, is_valid_rle
 
-    if not cache_maps and not old_camera.has_distortion() and not new_camera.has_distortion():
-        # No distortion, we can use a perspective warp
-        remapped = reproject_image_fast(
+    if (
+        not cache_maps
+        and not old_camera.has_distortion()
+        and not new_camera.has_distortion()
+        and border_mode == cv2.BORDER_CONSTANT
+    ):
+        # No distortion, we can use a perspective warp. Restricted to constant borders:
+        # warpPerspective wraps points behind the camera into the image, so the region
+        # outside the valid mask must be overwritten, which would clobber the border
+        # content of other border modes (the remap path below handles those via NaN maps).
+        remapped = _reproject_image_fast(
             image, old_camera, new_camera, output_imshape, border_mode, cv_bv, interp, dst
         )
-        is_valid_rle = validity.get_valid_mask_reproj(
-            old_camera, new_camera, imshape_old=image.shape[:2], imshape_new=output_imshape
+        is_valid_rle = validity._get_valid_mask_reproj(
+            old_camera, new_camera, image.shape[:2], output_imshape
         )
         is_valid_rle.decode_into(remapped, bg_value=border_value)
         return remapped, is_valid_rle
@@ -560,6 +581,15 @@ def reproject_image_fast(
 ):
     """Like reproject_image, but assumes there are no lens distortions."""
     output_imshape = _resolve_output_imshape(output_imshape, new_camera)
+    return _reproject_image_fast(
+        image, old_camera, new_camera, output_imshape, border_mode, border_value, interp, dst
+    )
+
+
+def _reproject_image_fast(
+    image, old_camera, new_camera, output_imshape,
+    border_mode=cv2.BORDER_CONSTANT, border_value=None, interp=cv2.INTER_LINEAR, dst=None,
+):
     homography = coordframes.mul_K_M_Kinv(
         old_camera.intrinsic_matrix, old_camera.R @ new_camera.R.T, new_camera.intrinsic_matrix
     )
@@ -594,6 +624,15 @@ def reproject_image_affine(
     dst=None,
 ):
     output_imshape = _resolve_output_imshape(output_imshape, new_camera)
+    return _reproject_image_affine(
+        image, old_camera, new_camera, output_imshape, border_mode, border_value, interp, dst
+    )
+
+
+def _reproject_image_affine(
+    image, old_camera, new_camera, output_imshape,
+    border_mode=cv2.BORDER_CONSTANT, border_value=0, interp=cv2.INTER_LINEAR, dst=None,
+):
     K_new = new_camera.intrinsic_matrix
     K_old = old_camera.intrinsic_matrix
     affine_mat_2x3 = coordframes.relative_intrinsics(K_new, K_old)[:2]
@@ -616,7 +655,7 @@ def reproject_mask(
     mask,
     old_camera,
     new_camera,
-    dst_shape,
+    dst_shape=None,
     border_mode=cv2.BORDER_CONSTANT,
     border_value=0,
     interp=None,
@@ -630,7 +669,8 @@ def reproject_mask(
         mask: Binary mask array (bool or uint8) in the old camera's image space.
         old_camera: Source camera.
         new_camera: Target camera.
-        dst_shape: Output shape (height, width).
+        dst_shape: DEPRECATED. Output shape (height, width).
+            Use new_camera.image_shape instead.
         border_mode: OpenCV border mode for out-of-bounds pixels.
         border_value: Value for border pixels.
         interp: Interpolation method.
@@ -641,6 +681,9 @@ def reproject_mask(
     Returns:
         Reprojected mask, or tuple of (mask, validity_mask) if return_validity_mask=True.
     """
+    dst_shape = _resolve_output_imshape(dst_shape, new_camera, "dst_shape")
+    if new_camera.image_shape is None or tuple(new_camera.image_shape) != tuple(dst_shape):
+        new_camera = new_camera.copy(image_shape=dst_shape)
     input_bool = mask.dtype == bool
     if input_bool:
         mask = mask.view(np.uint8)
@@ -650,7 +693,7 @@ def reproject_mask(
         mask,
         old_camera,
         new_camera,
-        dst_shape,
+        None,
         border_mode,
         border_value,
         interp,
@@ -696,7 +739,7 @@ def reproject_rle_mask(
     rle_mask,
     old_camera,
     new_camera,
-    dst_shape,
+    dst_shape=None,
     interp=None,
     antialias_factor=1,
     dst=None,
@@ -709,7 +752,8 @@ def reproject_rle_mask(
         rle_mask: RLE-encoded binary mask in the old camera's image space.
         old_camera: Source camera.
         new_camera: Target camera.
-        dst_shape: Output shape (height, width).
+        dst_shape: DEPRECATED. Output shape (height, width).
+            Use new_camera.image_shape instead.
         interp: Interpolation method.
         antialias_factor: Antialiasing factor (1 = no antialiasing).
         dst: Optional pre-allocated output array.
@@ -719,6 +763,7 @@ def reproject_rle_mask(
     Returns:
         Reprojected RLE mask.
     """
+    dst_shape = _resolve_output_imshape(dst_shape, new_camera, "dst_shape")
     if (
         warp_in_rle
         and not old_camera.has_fisheye_distortion()
@@ -729,11 +774,13 @@ def reproject_rle_mask(
         cropped_rle, bbox = rle_mask.tight_crop()
         old_camera_shifted = old_camera.image_shifted(-bbox[:2])
         mask = cropped_rle.to_array(255, order='C')
+        if new_camera.image_shape is None or tuple(new_camera.image_shape) != tuple(dst_shape):
+            new_camera = new_camera.copy(image_shape=dst_shape)
         new_mask = reproject_image(
             mask,
             old_camera_shifted,
             new_camera,
-            dst_shape,
+            None,
             interp=interp,
             antialias_factor=antialias_factor,
             dst=dst,
@@ -747,7 +794,7 @@ def reproject_rle_mask(
 
 
 def _reproject_rle_mask_in_rle(rle_mask, old_camera, new_camera, dst_shape):
-    valid_rle = validity.get_valid_mask_reproj(
+    valid_rle = validity._get_valid_mask_reproj(
         new_camera, old_camera, None, rle_mask.shape
     )
     rle_masked_to_valid = rle_mask & valid_rle

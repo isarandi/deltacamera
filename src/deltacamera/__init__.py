@@ -87,8 +87,17 @@ from .validity import (
 # it doesn't know that `Camera` refers to `deltacamera.Camera` rather than
 # `deltacamera.core.Camera`. The _module_original_ attribute preserves the true module
 # for use by docs/conf.py's `module_restored` context manager when resolving source links.
-for _x in __all__:
-    _obj = globals().get(_x)
-    if _obj is not None and hasattr(_obj, "__module__"):
-        _obj._module_original_ = _obj.__module__
-        _obj.__module__ = __name__
+def _set_module_for_docs(module_name, module_globals, all_names):
+    # Done in a function (not a module-level loop) so the loop variables don't leak into the
+    # package namespace. The hasattr guard keeps aliased exports (the same object under two
+    # names) and re-imports from re-reading the already-patched module into _module_original_.
+    for name in all_names:
+        obj = module_globals.get(name)
+        if obj is None or not hasattr(obj, "__module__"):
+            continue
+        if not hasattr(obj, "_module_original_"):
+            obj._module_original_ = obj.__module__
+        obj.__module__ = module_name
+
+
+_set_module_for_docs(__name__, globals(), __all__)

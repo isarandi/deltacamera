@@ -736,7 +736,12 @@ def get_valid_poly_reproj(old_camera, new_camera, imshape_old=None, imshape_new=
     """
     effective_imshape_old = _resolve_imshape(imshape_old, old_camera, "imshape_old")
     effective_imshape_new = _resolve_imshape(imshape_new, new_camera, "imshape_new")
+    return _get_valid_poly_reproj(
+        old_camera, new_camera, effective_imshape_old, effective_imshape_new
+    )
 
+
+def _get_valid_poly_reproj(old_camera, new_camera, effective_imshape_old, effective_imshape_new):
     near_z = np.float32(1e-3)
     far_z = np.float32(1e6)
 
@@ -933,9 +938,16 @@ def get_valid_mask_reproj(old_camera, new_camera, imshape_old=None, imshape_new=
     """
     effective_imshape_old = _resolve_imshape(imshape_old, old_camera, "imshape_old")
     effective_imshape_new = _resolve_imshape_required(imshape_new, new_camera, "imshape_new")
+    return _get_valid_mask_reproj(
+        old_camera, new_camera, effective_imshape_old, effective_imshape_new
+    )
 
+
+def _get_valid_mask_reproj(old_camera, new_camera, effective_imshape_old, effective_imshape_new):
     return shapely_to_rle(
-        get_valid_poly_reproj(old_camera, new_camera, effective_imshape_old, effective_imshape_new),
+        _get_valid_poly_reproj(
+            old_camera, new_camera, effective_imshape_old, effective_imshape_new
+        ),
         effective_imshape_new,
     )
 
