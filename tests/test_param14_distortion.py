@@ -227,3 +227,67 @@ class TestEdgeCases:
 
         np.testing.assert_allclose(recovered, points, atol=1e-5)
 
+
+
+class TestWarpInRLE14Param:
+    """RLE-space mask reprojection (warp_in_rle=True) with the tilted-sensor model."""
+
+    @staticmethod
+    def _make_cam(f, coeffs, roll_deg=0.0):
+        import deltacamera
+        from deltacamera.distortion_models import BrownConradyEx
+
+        a = np.deg2rad(roll_deg)
+        c, s = np.cos(a), np.sin(a)
+        rot = np.array([[c, -s, 0], [s, c, 0], [0, 0, 1.0]], dtype=np.float32)
+        intr = np.array([[f, 0, 319.5], [0, f, 239.5], [0, 0, 1]], dtype=np.float32)
+        return deltacamera.Camera(
+            intrinsic_matrix=intr,
+            rot_world_to_cam=rot,
+            distortion_model=BrownConradyEx(np.float32(coeffs)),
+        )
+
+    @staticmethod
+    def _blob_mask():
+        y, x = np.ogrid[:480, :640]
+        return (
+            ((x - 320) ** 2 + (y - 240) ** 2 < 90 ** 2)
+            | ((x - 450) ** 2 + (y - 150) ** 2 < 50 ** 2)
+        ).astype(np.uint8)
+
+    @staticmethod
+    def _iou(a, b):
+        a, b = np.asarray(a, bool), np.asarray(b, bool)
+        union = np.logical_or(a, b).sum()
+        return np.logical_and(a, b).sum() / union if union else 1.0
+
+    @pytest.mark.parametrize('roll_deg', [0.0, 20.0, 90.0])
+    def test_tilted_source_matches_dense(self, roll_deg):
+        import deltacamera
+        from rlemasklib import RLEMask
+
+        cam1 = self._make_cam(220.0, make_awkward_14_coeffs())
+        cam2 = self._make_cam(200.0, make_12_param_coeffs(), roll_deg=roll_deg)
+        rle = RLEMask.from_array(self._blob_mask())
+
+        res_rle = deltacamera.reproject_rle_mask(
+            rle, cam1, cam2, (480, 640), warp_in_rle=True)
+        res_dense = deltacamera.reproject_rle_mask(
+            rle, cam1, cam2, (480, 640), warp_in_rle=False)
+
+        assert self._iou(np.array(res_rle), np.array(res_dense)) > 0.95
+
+    def test_tilted_target_matches_dense(self):
+        import deltacamera
+        from rlemasklib import RLEMask
+
+        cam1 = self._make_cam(220.0, make_12_param_coeffs())
+        cam2 = self._make_cam(200.0, make_awkward_14_coeffs(), roll_deg=15.0)
+        rle = RLEMask.from_array(self._blob_mask())
+
+        res_rle = deltacamera.reproject_rle_mask(
+            rle, cam1, cam2, (480, 640), warp_in_rle=True)
+        res_dense = deltacamera.reproject_rle_mask(
+            rle, cam1, cam2, (480, 640), warp_in_rle=False)
+
+        assert self._iou(np.array(res_rle), np.array(res_dense)) > 0.95

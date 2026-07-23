@@ -768,6 +768,8 @@ def reproject_rle_mask(
         Reprojected RLE mask.
     """
     dst_shape = _resolve_output_imshape(dst_shape, new_camera, "dst_shape")
+    if rle_mask.area() == 0:
+        return rlemasklib.RLEMask.zeros(dst_shape)
     if (
         warp_in_rle
         and not old_camera.has_fisheye_distortion()
@@ -811,19 +813,21 @@ def _reproject_rle_mask_in_rle(rle_mask, old_camera, new_camera, dst_shape):
         )
         return rle_masked_to_valid.warp_perspective(homography, dst_shape)
 
-    old_d = old_camera.get_distortion_coeffs(12)
-    new_d = new_camera.get_distortion_coeffs(12)
+    old_d = np.pad(old_camera.get_distortion_coeffs(12, 14), (0, 2))[:14]
+    new_d = np.pad(new_camera.get_distortion_coeffs(12, 14), (0, 2))[:14]
 
     if np.allclose(new_camera.R, old_camera.R) and np.allclose(old_d, new_d):
         return rle_masked_to_valid.warp_affine(
             coordframes.relative_intrinsics(
-                new_camera.intrinsic_matrix, old_camera.intrinsic_matrix
+                old_camera.intrinsic_matrix, new_camera.intrinsic_matrix
             ),
             dst_shape,
         )
 
-    polar_ud1 = validity.get_valid_distortion_region_cached(old_d.tobytes())
-    polar_ud2 = validity.get_valid_distortion_region_cached(new_d.tobytes())
+    # The valid-region tables describe the 12-coefficient part of the model; the sensor
+    # tilt (tau_x, tau_y) is an exact homography applied after it, handled inside the warp.
+    polar_ud1 = validity.get_valid_distortion_region_cached(old_d[:12].tobytes())
+    polar_ud2 = validity.get_valid_distortion_region_cached(new_d[:12].tobytes())
     return rle_masked_to_valid.warp_distorted(
         old_camera.R,
         new_camera.R,
