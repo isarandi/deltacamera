@@ -23,8 +23,8 @@ def allclose_or_nones(a, b):
 
 
 def equal_or_nones(a, b):
-    """Check if all corresponding values in arrays a and b are close to each other in the sense of
-    np.allclose, or both a and b are None, or one is None and the other is filled with zeros.
+    """Check if arrays a and b are exactly equal in the sense of np.array_equal,
+    or both a and b are None, or one is None and the other is filled with zeros.
     """
 
     if a is None and b is None:

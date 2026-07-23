@@ -64,7 +64,7 @@ class Camera:
         distortion_model: Optional[LensDistortionModel] = None,
     ):
         dtype = np.float32
-        if optical_center is not None and extrinsic_matrix is not None:
+        if sum(x is not None for x in (optical_center, trans_after_rot, extrinsic_matrix)) > 1:
             raise ValueError(
                 "Provide only one of `optical_center`, `trans_after_rot` or `extrinsic_matrix`!"
             )
@@ -248,6 +248,15 @@ class Camera:
         Returns:
             points in camera coordinates
         """
+        if depth is not None and not np.isscalar(depth):
+            depth = np.asarray(depth)
+            if depth.ndim == 0:
+                depth = float(depth)
+            elif depth.size != len(points):
+                raise ValueError(
+                    f"Depth array has {depth.size} elements, "
+                    f"but there are {len(points)} points."
+                )
         if not self.has_distortion():
             if depth is None:
                 return coordframes.undo_intrinsics(
@@ -351,7 +360,8 @@ class Camera:
         is_valid = is_valid & cv2.inRange(
             im_points[np.newaxis], lowerb=(0, 0), upperb=(float(ub_x), float(ub_y)),
         ).squeeze(0)
-        return is_valid
+        # cv2.inRange yields uint8; convert so `~result` behaves as boolean negation
+        return is_valid.astype(bool)
 
     # Methods to transform the camera parameters
     @camera_transform
@@ -405,12 +415,14 @@ class Camera:
 
         rot_matrix = cv2.Rodrigues(axis * angle_radians)[0]
         # The eye position rotates simply as any point
-        self.t = (rot_matrix @ (self.t - world_point_pivot)) + world_point_pivot
+        self.t = ((rot_matrix @ (self.t - world_point_pivot)) + world_point_pivot).astype(
+            np.float32
+        )
 
         # R is rotated by a transform expressed in world coords, so it (its inverse since its a
         # coord transform matrix, not a point transform matrix) is applied on the right.
         # (inverse = transpose for rotation matrices, they are orthogonal)
-        self.R = self.R @ rot_matrix.T
+        self.R = (self.R @ rot_matrix.T).astype(np.float32)
 
     @camera_transform
     def rotate(self, yaw=0, pitch=0, roll=0):
@@ -476,7 +488,9 @@ class Camera:
         return isinstance(self._distortion_model, _dm.BrownConradyEx)
 
     def get_pitch_roll(self):
-        yaw, pitch, roll = Rotation.from_matrix(self.R).as_euler("YXZ").astype(np.float32)
+        # self.R is the world-to-camera coordinate transform; the camera orientation is its
+        # transpose (cf. `rotate`, which composes as Rot_YXZ(y, p, r).T @ R).
+        yaw, pitch, roll = Rotation.from_matrix(self.R.T).as_euler("YXZ").astype(np.float32)
         return pitch, roll
 
     @camera_transform
@@ -649,10 +663,10 @@ class Camera:
                 new_x = unit_vec(np.cross(new_z, np.array([0, 1, 0], dtype=np.float32)))
         new_y = np.cross(new_z, new_x)
 
-        # row_stack because we need the inverse transform (we make a matrix that transforms
+        # stacking as rows because we need the inverse transform (we make a matrix that transforms
         # points from one coord system to another), which is the same as the transpose
         # for rotation matrices.
-        self.R = np.row_stack([new_x, new_y, new_z]).astype(np.float32)
+        self.R = np.stack([new_x, new_y, new_z]).astype(np.float32)
 
     # Getters
     def get_projection_matrix(self) -> np.ndarray:
@@ -981,7 +995,7 @@ class Camera:
                 new_x = unit_vec(np.cross(new_z, np.array([0, 1, 0], dtype=np.float32)))
         new_y = np.cross(new_z, new_x)
 
-        new_R = np.row_stack([new_x, new_y, new_z]).astype(np.float32)
+        new_R = np.stack([new_x, new_y, new_z]).astype(np.float32)
         return self.copy(rot_world_to_cam=new_R)
 
     def orbited_around(self, world_point, angle, axis="vertical") -> "Camera":

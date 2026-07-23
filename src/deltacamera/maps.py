@@ -6,7 +6,12 @@ import numpy as np
 import rlemasklib
 
 from . import core, coordframes, distortion, maps_impl, validity
-from .distortion_models import infer_distortion_model
+from .distortion_models import BrownConradyEx, FisheyeKannalaBrandt
+
+_DISTORTION_MODEL_TYPES = {
+    'BrownConradyEx': BrownConradyEx,
+    'FisheyeKannalaBrandt': FisheyeKannalaBrandt,
+}
 
 
 def make_maps(old_camera, new_camera, output_imshape, precomp_undist_maps):
@@ -41,8 +46,15 @@ def get_maps_and_mask_cached(
     # In other cases, if we're not having exactly equal Rs, there will be small numerical errors
     # even if the intended relative rotation is the same. This could be handled in the future.
     # Perhaps through quantization or custom cache with binning then verifying.
+    # Exactly equal rotations must yield an exactly-identity relative rotation, otherwise the
+    # float32 product R_new @ R_old^T is only approximately identity and the exact-equality
+    # fast paths in maps_impl (affine/homography) never fire.
+    if np.array_equal(old_camera.R, new_camera.R):
+        R_rel = np.eye(3, dtype=np.float32)
+    else:
+        R_rel = new_camera.R @ old_camera.R.T
     old_camera2 = old_camera.copy(R=np.eye(3, dtype=np.float32))
-    new_camera2 = new_camera.copy(R=new_camera.R @ old_camera.R.T)
+    new_camera2 = new_camera.copy(R=R_rel)
     old_camdict = cam2dict(old_camera2)
     new_camdict = cam2dict(new_camera2)
     return _get_maps_and_mask_cached(
@@ -75,18 +87,24 @@ def make_maps_and_mask(old_camera, new_camera, input_imshape, output_imshape, pr
 
 
 def cam2dict(camera):
-    d = camera._distortion_model.coeffs if camera._distortion_model else None
+    # The model type must be serialized along with the coefficients: re-inferring it
+    # from the coeffs alone would degrade e.g. a zero-coefficient fisheye (a legitimate
+    # ideal equidistant camera, r_d = theta != tan(theta)) to a pinhole camera.
+    dm = camera._distortion_model
+    d = (type(dm).__name__, dm.coeffs) if dm is not None else None
     dicti = dict(K=camera.intrinsic_matrix, R=camera.R, t=camera.t, d=d)
     return msgpack_numpy.packb(dicti)
 
 
 def dict2cam(dicti):
     dicti = msgpack_numpy.unpackb(dicti)
+    d = dicti["d"]
+    distortion_model = _DISTORTION_MODEL_TYPES[d[0]](d[1]) if d is not None else None
     return core.Camera(
         intrinsic_matrix=dicti["K"],
         rot_world_to_cam=dicti["R"],
         optical_center=dicti["t"],
-        distortion_model=infer_distortion_model(dicti["d"]),
+        distortion_model=distortion_model,
     )
 
 

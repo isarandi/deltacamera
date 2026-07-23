@@ -252,7 +252,8 @@ def _distort_points_with_jacobian(pun, d, dst, jac_dst):
         x13 = _1 / (r2 * x11 + _1)
         x29 = x13 * (r2 * x7 + _1)
         x14 = pux * _2_k3 + puy * _2_k2 + x29
-        x26 = x13 * x13 * ((r2 * (k4_r2 + x6) + x7) - x29 * x29 * (r2 * (k7_r2 + x10) + x11))
+        # d(P/Q)/d(r2) by the quotient rule: (P' - (P/Q) * Q') / Q
+        x26 = x13 * ((r2 * (k4_r2 + x6) + x7) - x29 * (r2 * (k7_r2 + x10) + x11))
         x19 = pux * x26 + k3
         x21 = puy * x26 + k2
         x27 = k9_r2 + x2
@@ -318,7 +319,8 @@ def _undistort_points(
 ):
     """Remove Brown-Conrady distortion with optional tilt (14-param model).
 
-    For 14-param: first inverts the tilt transformation, then undistorts the 12-param.
+    For 14-param: validity is checked in the tilted input space (where the valid-region
+    tables live), then the tilt is inverted and the 12-param distortion removed.
     """
     k0, k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11 = d[:12]
     _0 = np.float32(0)
@@ -347,34 +349,28 @@ def _undistort_points(
         ti00, ti01, ti02 = inv_cx, _0, _0
         ti10, ti11, ti12 = sy * sx * inv_cxcy, inv_cy, _0
         ti20, ti21, ti22 = -sy * inv_cy, sx * inv_cxcy, inv_cxcy
+        # Third (w) row of the forward tilt matrix, for the untilt Jacobian.
+        # Captured here because cx/cy are reused as local names further below.
+        tw0, tw1, tw2 = sy, -cy * sx, cy * cx
 
     (ru_valid, tu_valid), (rd_valid, td_valid) = polar_ud_valid
     ru2_valid_min = np.square(np.min(ru_valid))
 
     lambda_ = np.float32(lambda_)
 
-    # If tilt present, first undo tilt to get 12-param distorted points
-    if has_tilt:
-        pn_untilted = np.empty_like(pn)
-        for i in range(pn.shape[0]):
-            pnx, pny = pn[i, 0], pn[i, 1]
-            w = ti20 * pnx + ti21 * pny + ti22
-            pn_untilted[i, 0] = (ti00 * pnx + ti01 * pny + ti02) / w
-            pn_untilted[i, 1] = (ti10 * pnx + ti11 * pny + ti12) / w
-        pn_for_undistort = pn_untilted
-    else:
-        pn_for_undistort = pn
-
-    pn_valid = pn_for_undistort
+    # Validity checking/clipping happens in the original (post-tilt) space: the
+    # valid-region boundary (rd_valid, td_valid) is computed with the full 14-param
+    # model including tilt. The tilt is undone afterwards, for the surviving points.
+    pn_checked = pn
 
     if clip_to_valid:
-        pn_valid = np.empty_like(pn_for_undistort)
+        pn_checked = np.empty_like(pn)
         # in this case we do process the points that are outside the valid region
         # in this case we scale back the norm to the max valid radius
         # and then apply the distortion model
         rn2_valid_min = np.square(np.min(rd_valid))
-        for i in range(pn_for_undistort.shape[0]):
-            pnx, pny = pn_for_undistort[i, 0], pn_for_undistort[i, 1]
+        for i in range(pn.shape[0]):
+            pnx, pny = pn[i, 0], pn[i, 1]
             rn2 = pnx * pnx + pny * pny
             if rn2 > rn2_valid_min:
                 t = np.arctan2(pny, pnx)
@@ -382,24 +378,24 @@ def _undistort_points(
                 r2_interp = r_interp * r_interp
                 if rn2 > r2_interp:
                     scale = r_interp / np.sqrt(rn2)
-                    pn_valid[i, 0] = scale * pnx
-                    pn_valid[i, 1] = scale * pny
+                    pn_checked[i, 0] = scale * pnx
+                    pn_checked[i, 1] = scale * pny
                 else:
-                    pn_valid[i, 0] = pnx
-                    pn_valid[i, 1] = pny
+                    pn_checked[i, 0] = pnx
+                    pn_checked[i, 1] = pny
             else:
-                pn_valid[i, 0] = pnx
-                pn_valid[i, 1] = pny
+                pn_checked[i, 0] = pnx
+                pn_checked[i, 1] = pny
         all_valid = True
     elif check_validity:
         # in this case we don't process points that are outside the valid region
         # but will set nan to the output for them
         rn2_valid_max = np.square(np.max(rd_valid))
         rn2_valid_min = np.square(np.min(rd_valid))
-        i_valid = np.empty(pn_for_undistort.shape[0], dtype=np.int32)
+        i_valid = np.empty(pn.shape[0], dtype=np.int32)
         i_out = 0
-        for i in range(pn_for_undistort.shape[0]):
-            pnx, pny = pn_for_undistort[i, 0], pn_for_undistort[i, 1]
+        for i in range(pn.shape[0]):
+            pnx, pny = pn[i, 0], pn[i, 1]
             rn2 = pnx * pnx + pny * pny
             if rn2 > rn2_valid_max:
                 continue
@@ -411,13 +407,26 @@ def _undistort_points(
                     continue
             i_valid[i_out] = i
             i_out += 1
-        all_valid = i_out == pn_for_undistort.shape[0]
+        all_valid = i_out == pn.shape[0]
         if not all_valid:
-            pn_valid = np.empty((i_out, 2), dtype=np.float32)
+            pn_selected = np.empty((i_out, 2), dtype=np.float32)
             for i in range(i_out):
-                pn_valid[i, 0] = pn_for_undistort[i_valid[i], 0]
-                pn_valid[i, 1] = pn_for_undistort[i_valid[i], 1]
+                pn_selected[i, 0] = pn[i_valid[i], 0]
+                pn_selected[i, 1] = pn[i_valid[i], 1]
             i_valid = i_valid[:i_out]
+            pn_checked = pn_selected
+
+    # If tilt present, undo tilt to get 12-param distorted points
+    if has_tilt:
+        pn_untilted = np.empty_like(pn_checked)
+        for i in range(pn_checked.shape[0]):
+            pnx, pny = pn_checked[i, 0], pn_checked[i, 1]
+            w = ti20 * pnx + ti21 * pny + ti22
+            pn_untilted[i, 0] = (ti00 * pnx + ti01 * pny + ti02) / w
+            pn_untilted[i, 1] = (ti10 * pnx + ti11 * pny + ti12) / w
+        pn_valid = pn_untilted
+    else:
+        pn_valid = pn_checked
 
     pun_hat = np.empty_like(pn_valid)
     if include_jacobian:
@@ -489,7 +498,8 @@ def _undistort_points(
             x13 = _1 / (r2 * x11 + _1)
             x29 = x13 * (r2 * x7 + _1)
             x14 = pun_hat[i, 0] * _2_k3 + pun_hat[i, 1] * _2_k2 + x29
-            x26 = x13 * x13 * ((r2 * (k4_r2 + x6) + x7) - x29 * x29 * (r2 * (k7_r2 + x10) + x11))
+            # d(P/Q)/d(r2) by the quotient rule: (P' - (P/Q) * Q') / Q
+            x26 = x13 * ((r2 * (k4_r2 + x6) + x7) - x29 * (r2 * (k7_r2 + x10) + x11))
             x19 = pun_hat[i, 0] * x26 + k3
             x21 = pun_hat[i, 1] * x26 + k2
             x27 = k9_r2 + x2
@@ -512,10 +522,31 @@ def _undistort_points(
             inv_det = _1 / det
 
             if include_jacobian and i_iter == n_iter_newton - 1:
-                jac_hat[i, 0] = j11 * inv_det
-                jac_hat[i, 1] = -j01 * inv_det
-                jac_hat[i, 2] = -j10 * inv_det
-                jac_hat[i, 3] = j00 * inv_det
+                i00 = j11 * inv_det
+                i01 = -j01 * inv_det
+                i10 = -j10 * inv_det
+                i11 = j00 * inv_det
+                if has_tilt:
+                    # The full undistortion is untilt followed by 12-param undistortion,
+                    # so the Jacobian w.r.t. the tilted input chains the untilt Jacobian
+                    # on the right. It is evaluated at the untilted point via the identity
+                    # w_untilt(pn) = 1 / w_tilt(pu12).
+                    xu = pn_valid[i, 0]
+                    yu = pn_valid[i, 1]
+                    w_tilt = tw0 * xu + tw1 * yu + tw2
+                    ju00 = (ti00 - xu * ti20) * w_tilt
+                    ju01 = (ti01 - xu * ti21) * w_tilt
+                    ju10 = (ti10 - yu * ti20) * w_tilt
+                    ju11 = (ti11 - yu * ti21) * w_tilt
+                    jac_hat[i, 0] = i00 * ju00 + i01 * ju10
+                    jac_hat[i, 1] = i00 * ju01 + i01 * ju11
+                    jac_hat[i, 2] = i10 * ju00 + i11 * ju10
+                    jac_hat[i, 3] = i10 * ju01 + i11 * ju11
+                else:
+                    jac_hat[i, 0] = i00
+                    jac_hat[i, 1] = i01
+                    jac_hat[i, 2] = i10
+                    jac_hat[i, 3] = i11
                 continue
 
             err_x = pn_valid[i, 0] - pnx_hat
@@ -581,11 +612,14 @@ def _distort_points_fisheye(pun, d, rud_valid, check_validity, clip_to_valid, ds
                 dst[i, 0] = _0
                 dst[i, 1] = _0
             else:
-                r = np.sqrt(r2) if r2 <= ru_valid * ru_valid else ru_valid
+                # Dividing by the original (unclamped) radius makes clipped points land
+                # exactly on the valid-boundary radius t_d(ru_valid).
+                r_orig = np.sqrt(r2)
+                r = r_orig if r_orig <= ru_valid else ru_valid
                 t = np.arctan(r)
                 t2 = t * t
                 t_d = t * (_1 + t2 * (d0 + t2 * (d1 + t2 * (d2 + t2 * d3))))
-                s = t_d / r
+                s = t_d / r_orig
                 dst[i, 0] = pux_old * s
                 dst[i, 1] = puy_old * s
     else:

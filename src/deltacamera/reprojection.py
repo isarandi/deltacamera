@@ -141,6 +141,8 @@ def reproject_image(
         interpolation=cv2.INTER_AREA,
         dst=None if use_linear_srgb else dst,
     )
+    if result.ndim < image.ndim:
+        result = np.expand_dims(result, -1)
 
     if use_linear_srgb:
         result = encode_srgb(result, dst=dst, dtype=srgb_dtype)
@@ -211,7 +213,7 @@ def reproject_depth_map(
 
     if not cache_maps and same_rotation and old_camera._distortion_model == new_camera._distortion_model:
         # Only intrinsics changed: affine warp, no z-correction needed
-        remapped = reproject_image_affine(
+        remapped = _reproject_image_affine(
             depth_map, old_camera, hr_camera, hr_imshape,
             border_mode=cv2.BORDER_CONSTANT, border_value=np.nan, interp=interp,
         )
@@ -421,6 +423,8 @@ def reproject_rgbd(
         oh, ow = output_imshape
         new_image = cv2.resize(
             new_image, dsize=(ow, oh), interpolation=cv2.INTER_AREA, dst=dst)
+        if new_image.ndim < image.ndim:
+            new_image = np.expand_dims(new_image, -1)
         # Bilateral filter on high-res depth before block downsample
         nan_mask = np.isnan(new_depth)
         new_depth[nan_mask] = -1e9
@@ -969,9 +973,13 @@ def decode_srgb(im, dst=None):
 
 
 def _cv_border_value(border_value, n_channels):
-    """Normalize border_value for OpenCV functions that need per-channel tuples."""
+    """Normalize border_value for OpenCV functions that need per-channel tuples.
+
+    cv2's borderValue is a Scalar (doubles) regardless of image dtype, so no int cast:
+    it would truncate float border values and crash on NaN.
+    """
     if np.ndim(border_value) == 0 and n_channels > 1:
-        return (int(border_value),) * n_channels
+        return (float(border_value),) * n_channels
     return border_value
 
 

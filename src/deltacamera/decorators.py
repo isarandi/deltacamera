@@ -8,17 +8,23 @@ class DeprecatingArray(np.ndarray):
     """An ndarray subclass that emits a DeprecationWarning when modified.
 
     Used for Camera arrays to provide a soft migration path from mutable to immutable API.
-    Mutations still work but emit warnings, unless _suppress_warning is True.
+    Mutations still work but emit warnings, unless suppression is active
+    (see _suppress_warnings/_restore_warnings, which keep a reentrant counter).
 
     Usage:
         arr = np.asanyarray(data, dtype=np.float32).view(DeprecatingArray)
     """
 
     def __array_finalize__(self, obj):
-        self._suppress_warning = getattr(obj, "_suppress_warning", False)
+        self._suppress_count = getattr(obj, "_suppress_count", 0)
+
+    def copy(self, order='C'):
+        # A copy is a fresh buffer detached from any Camera; mutating it is not a
+        # mutation of camera state, so return a plain ndarray that warns nothing.
+        return np.asarray(self).copy(order)
 
     def __setitem__(self, key, value):
-        if not self._suppress_warning:
+        if self._suppress_count == 0:
             warnings.warn(
                 "Direct mutation of Camera arrays is deprecated. "
                 "Use immutable methods like zoomed(), rotated(), image_shifted() instead, "
@@ -44,13 +50,13 @@ def _reconstruct_array(data_bytes, dtype_str, shape):
 def _suppress_warnings(arr):
     """Suppress deprecation warnings on this array (for legacy mutable API)."""
     if isinstance(arr, DeprecatingArray):
-        arr._suppress_warning = True
+        arr._suppress_count += 1
 
 
 def _restore_warnings(arr):
     """Restore deprecation warnings on this array."""
     if isinstance(arr, DeprecatingArray):
-        arr._suppress_warning = False
+        arr._suppress_count = max(0, arr._suppress_count - 1)
 
 
 def point_transform(f):
@@ -65,6 +71,9 @@ def point_transform(f):
 
         reshaped = np.reshape(points, [-1, points.shape[-1]])
         reshaped_result = f(self, reshaped, *args, **kwargs)
+        if reshaped_result.ndim == 1:
+            # Functions like is_visible return one scalar per point
+            return np.reshape(reshaped_result, points.shape[:-1])
         return np.reshape(reshaped_result, [*points.shape[:-1], reshaped_result.shape[-1]])
 
     return wrapped

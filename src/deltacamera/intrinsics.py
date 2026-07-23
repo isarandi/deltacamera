@@ -30,7 +30,7 @@ def estimate_fov_from_vanishing_points(vp1, vp2, imshape):
     vp2 = np.asarray(vp2, dtype=np.float64)
 
     height, width = imshape[:2]
-    c = np.array([width / 2, height / 2])
+    c = np.array([(width - 1) / 2, (height - 1) / 2])
 
     # For orthogonal vanishing points: (v1-c)·(v2-c) = -f²
     dot = (vp1 - c) @ (vp2 - c)

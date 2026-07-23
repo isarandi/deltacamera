@@ -11,25 +11,15 @@ class TestEstimateFovFromVanishingPoints:
 
     def test_basic_orthogonal_vps(self):
         """Test with simple orthogonal vanishing points."""
-        # Image center at (960, 540) for 1920x1080
-        # VP1 at (2000, 540) -> (v1 - c) = (1040, 0)
-        # VP2 at (960, 1580) -> (v2 - c) = (0, 1040)
-        # Dot product = 0, but we need negative, so adjust
-        # VP1 at (2000, 600) -> (v1 - c) = (1040, 60)
-        # VP2 at (900, 1580) -> (v2 - c) = (-60, 1040)
-        # Dot = 1040*(-60) + 60*1040 = -62400 + 62400 = 0 (still zero)
-        # Let's use: VP1 at (2000, 540), VP2 at (960, -500)
-        # (v1 - c) = (1040, 0), (v2 - c) = (0, -1040)
-        # Dot = 0... need different approach
-
+        # Image center at ((1920-1)/2, (1080-1)/2) = (959.5, 539.5) for 1920x1080
         # Use VPs where dot product is negative:
-        # VP1 at (1960, 640), VP2 at (860, 440)
-        # (v1 - c) = (1000, 100), (v2 - c) = (-100, -100)
+        # VP1 at c + (1000, 100), VP2 at c + (-100, -100)
         # Dot = 1000*(-100) + 100*(-100) = -100000 - 10000 = -110000
         # f = sqrt(110000) = 331.66
+        cx, cy = 959.5, 539.5
         result = estimate_fov_from_vanishing_points(
-            vp1=[1960, 640],
-            vp2=[860, 440],
+            vp1=[cx + 1000, cy + 100],
+            vp2=[cx - 100, cy - 100],
             imshape=(1080, 1920)
         )
 
@@ -60,7 +50,7 @@ class TestEstimateFovFromVanishingPoints:
     def test_symmetric_vps(self):
         """Test with symmetric vanishing points around image center."""
         imshape = (1080, 1920)
-        cx, cy = 960, 540
+        cx, cy = 959.5, 539.5
 
         # Symmetric VPs: one left of center, one above center
         # VP1 at (cx - d, cy + eps), VP2 at (cx + eps, cy - d)
@@ -104,8 +94,8 @@ class TestEstimateFovFromVanishingPoints:
         np.testing.assert_allclose(K[0, 0], K[1, 1])
 
         # Principal point at image center
-        np.testing.assert_allclose(K[0, 2], 960)
-        np.testing.assert_allclose(K[1, 2], 540)
+        np.testing.assert_allclose(K[0, 2], 959.5)
+        np.testing.assert_allclose(K[1, 2], 539.5)
 
     def test_fov_consistency(self):
         """Test FOV values are consistent with focal length."""
@@ -171,13 +161,13 @@ class TestEstimateFovFromVanishingPoints:
 
         assert result is not None
         # Should use only H, W
-        np.testing.assert_allclose(result['K'][0, 2], 960)  # cx = W/2
-        np.testing.assert_allclose(result['K'][1, 2], 540)  # cy = H/2
+        np.testing.assert_allclose(result['K'][0, 2], 959.5)  # cx = (W-1)/2
+        np.testing.assert_allclose(result['K'][1, 2], 539.5)  # cy = (H-1)/2
 
     def test_wide_fov(self):
         """Test estimation of wide FOV (>90 degrees)."""
         imshape = (1080, 1920)
-        cx, cy = 960, 540
+        cx, cy = 959.5, 539.5
 
         # For wide FOV, focal length is small relative to image size
         # f = 400 gives h-fov ≈ 134 degrees
@@ -196,7 +186,7 @@ class TestEstimateFovFromVanishingPoints:
     def test_narrow_fov(self):
         """Test estimation of narrow FOV (<30 degrees)."""
         imshape = (1080, 1920)
-        cx, cy = 960, 540
+        cx, cy = 959.5, 539.5
 
         # For narrow FOV, focal length is large
         # f = 4000 gives h-fov ≈ 27 degrees

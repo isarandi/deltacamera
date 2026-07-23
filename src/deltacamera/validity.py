@@ -98,7 +98,7 @@ def get_valid_distortion_region(
     """
 
     if camera.has_fisheye_distortion():
-        return get_valid_distortion_region_fisheye(camera, n_vertices, cartesian)
+        return get_valid_distortion_region_fisheye(camera, n_vertices, cartesian, limit)
 
     dist_coeffs = camera.get_distortion_coeffs(14)
     (ru, tu), (rd, td) = get_valid_distortion_region_cached(
@@ -117,9 +117,12 @@ def get_valid_distortion_region(
 
 
 def get_valid_distortion_region_fisheye(
-    camera: "Camera", n_vertices: int = 128, cartesian: bool = True
+    camera: "Camera", n_vertices: int = 128, cartesian: bool = True, limit: float = 5
 ):
     ru, rd = fisheye_valid_r_max_cached(camera._distortion_model.coeffs)
+    # ru is inf when the distortion polynomial is monotonic on [0, pi/2]; clamp to the search
+    # limit so the polygon vertices stay finite (matching the Brown-Conrady path's limit).
+    ru = np.float32(min(ru, limit))
     t = np.linspace(-np.pi, np.pi, n_vertices)[:-1]
     if cartesian:
         return polar_to_cartesian_same_radius(ru, t), polar_to_cartesian_same_radius(rd, t)
@@ -154,7 +157,8 @@ def are_points_in_valid_region(points_undist: np.ndarray, d: np.ndarray) -> np.n
 
     Args:
         points_undist: Points in normalized image space, shape `(n_points, 2)`.
-        d: Distortion coefficients (up to 14), according to OpenCV's order.
+        d: Distortion coefficients according to OpenCV's order, padded with zeros to
+            exactly 12 or 14 elements (use e.g. ``camera.get_distortion_coeffs(12)``).
 
     Returns:
         Boolean array of shape `(n_points,)` indicating if the points are within the valid region.
@@ -171,7 +175,8 @@ def are_normalized_distorted_points_in_valid_region(
 
     Args:
         points: Points in normalized distorted image space, shape `(n_points, 2)`.
-        d: Distortion coefficients (up to 14), according to OpenCV's order.
+        d: Distortion coefficients according to OpenCV's order, padded with zeros to
+            exactly 12 or 14 elements (use e.g. ``camera.get_distortion_coeffs(12)``).
 
     Returns:
         Boolean array of shape `(n_points,)` indicating if the points are within the valid region.
@@ -230,8 +235,11 @@ def _get_valid_distortion_region_polar(
     d, limit, n_bins, n_bins_coarse, n_steps_line_search, n_iter_newton
 ):
     """Find valid region boundary in polar coordinates via coarse-to-fine search."""
-    # Limit search to avoid rational distortion asymptote (denominator zero)
-    asymptote_limit = np.sqrt(solve_cubic_smallest_nonneg_root(d[7], d[6], d[5], np.float32(1)))
+    # Limit search to avoid rational distortion asymptote (denominator zero). Back off
+    # slightly from the exact root: evaluating at the pole itself makes the Jacobian
+    # determinant blow up and corrupts the boundary search.
+    asymptote_r2 = solve_cubic_smallest_nonneg_root(d[7], d[6], d[5], np.float32(1))
+    asymptote_limit = np.sqrt(asymptote_r2) * np.float32(0.999)
     limit = np.minimum(limit, asymptote_limit)
 
     _2_pi = np.float32(2.0 * np.pi)
@@ -256,6 +264,33 @@ def _get_valid_distortion_region_polar(
         radii_dense = newton_optimize(radii_dense, theta_dense, d, n_iter=n_iter_newton)
     radii_dense = np.minimum(radii_dense, limit)
     radii_dense[radii_dense < 0] = 0  # Divergence symptom
+
+    # The sensor tilt (tau_x, tau_y) is a projective map applied after the 12-coefficient
+    # distortion. Its Jacobian blows up (rather than crossing zero) at the tilt horizon, so
+    # the det-based search above runs past it. Shrink each boundary radius until the
+    # 12-coefficient distorted point stays clearly on the visible side of the horizon,
+    # otherwise the boundary polygon folds over when mapped through the tilt.
+    if d.shape[0] > 12 and (d[12] != 0.0 or d[13] != 0.0):
+        t20 = np.float32(np.sin(d[13]))
+        t21 = np.float32(-np.cos(d[13]) * np.sin(d[12]))
+        t22 = np.float32(np.cos(d[12]) * np.cos(d[13]))
+        w_min = np.float32(0.1) * t22
+        d12 = d[:12].copy()
+        pu_i = np.empty((1, 2), dtype=np.float32)
+        for i in range(radii_dense.shape[0]):
+            r = radii_dense[i]
+            for _ in range(100):
+                pu_i[0, 0] = r * np.cos(theta_dense[i])
+                pu_i[0, 1] = r * np.sin(theta_dense[i])
+                q = distortion._distort_points(
+                    pu_i, d12, polar_ud_valid=None, check_validity=False,
+                    clip_to_valid=False, dst=None,
+                )
+                w = t20 * q[0, 0] + t21 * q[0, 1] + t22
+                if w >= w_min:
+                    break
+                r = r * np.float32(0.95)
+            radii_dense[i] = r
 
     # Convert boundary to distorted space
     pu = polar_to_cartesian(radii_dense, theta_dense)
@@ -434,9 +469,9 @@ def _jacobian_det_polar_impl(r, t, d, sy, cy_sx, cy_cx):
     # z = r20*x_d + r21*y_d + r22 where r20=sy, r21=-cy_sx, r22=cy_cx
     z = sy * x_d - cy_sx * y_d + cy_cx
 
-    # det(J_tilt) = 1 / z^3
+    # det(J_tilt) = det(M_tilt) / z^3 = (cy*cx)^2 / z^3
     inv_z = _1 / z
-    det_tilt = inv_z * inv_z * inv_z
+    det_tilt = cy_cx * cy_cx * inv_z * inv_z * inv_z
 
     return det_12param * det_tilt
 
@@ -577,11 +612,13 @@ def _jacobian_det_and_prime_polar_impl(r, t, d, sy, cy_sx, cy_cx):
     z = sy * x_d - cy_sx * y_d + cy_cx
     dz_dr = sy * dx_d_dr - cy_sx * dy_d_dr
 
-    # det(J_tilt) = 1 / z^3, d(det_tilt)/dr = -3/z^4 * dz/dr
+    # det(J_tilt) = det(M_tilt) / z^3 = (cy*cx)^2 / z^3
+    # d(det_tilt)/dr = -3 * (cy*cx)^2 / z^4 * dz/dr
+    det_M = cy_cx * cy_cx
     inv_z = _1 / z
     inv_z3 = inv_z * inv_z * inv_z
-    det_tilt = inv_z3
-    ddet_tilt_dr = -_3 * inv_z3 * inv_z * dz_dr
+    det_tilt = det_M * inv_z3
+    ddet_tilt_dr = -_3 * det_M * inv_z3 * inv_z * dz_dr
 
     # Total: det = det_12 * det_tilt
     # d(det)/dr = det_12' * det_tilt + det_12 * det_tilt'
@@ -594,57 +631,102 @@ def _jacobian_det_and_prime_polar_impl(r, t, d, sy, cy_sx, cy_cx):
 @numba.njit(error_model='numpy', cache=True)
 def solve_cubic_smallest_nonneg_root(a, b, c, d):
     """Solve the cubic equation :math:`ax^3 + bx^2 + cx + d = 0` and return the smallest
-    non-negative root or inf if there is no non-negative root."""
+    non-negative root or inf if there is no non-negative root.
 
-    _inf = np.float32(np.inf)
-    _1 = np.float32(1)
-    _2 = np.float32(2)
-    _3 = np.float32(3)
-    _4 = np.float32(4)
-    _9 = np.float32(9)
-    _27 = np.float32(27)
+    Computed in float64: Cardano's closed form cancels catastrophically in float32.
+    A leading coefficient that is tiny relative to the others (common case: the k6
+    rational distortion coefficient) is handled by a quadratic branch, near-double
+    roots take the three-real-roots branch via a discriminant tolerance, and all
+    candidate roots are Newton-polished on the full cubic before selection.
+    """
+    a = np.float64(a)
+    b = np.float64(b)
+    c = np.float64(c)
+    d = np.float64(d)
+    _inf = np.float64(np.inf)
+    _0 = np.float64(0.0)
+    _1 = np.float64(1.0)
+    _2 = np.float64(2.0)
+    _3 = np.float64(3.0)
+    _4 = np.float64(4.0)
+    _9 = np.float64(9.0)
+    _27 = np.float64(27.0)
 
-    if a == 0 and b == 0:
-        x = -d / c if c != 0 else _inf
-        return x if x >= 0 else _inf
-    elif a == 0:
-        D = c * c - _4 * b * d
-        if D >= 0:
-            D = np.sqrt(D)
-            x1 = (-c + D) / (_2 * b)
-            x2 = (-c - D) / (_2 * b)
-            x1 = x1 if x1 >= 0 else _inf
-            x2 = x2 if x2 >= 0 else _inf
-            return min(x1, x2)
+    candidates = np.full(7, _inf, np.float64)
+    n = 0
+
+    if abs(a) <= np.float64(1e-3) * max(abs(b), abs(c), abs(d)):
+        # Small leading coefficient: Cardano's h discriminant cancels catastrophically
+        # (even in float64 once |a| is ~1e-8 of the rest), so additionally seed the
+        # near-quadratic root estimates and the far root ~ -b/a. All candidates are
+        # Newton-polished and residual-checked below, so inexact or duplicate seeds
+        # (in the overlap region where Cardano also works) are harmless.
+        if b == 0:
+            if c != 0:
+                candidates[n] = -d / c
+                n += 1
         else:
-            return _inf
+            D = c * c - _4 * b * d
+            if D >= 0:
+                sqrt_D = np.sqrt(D)
+                candidates[n] = (-c + sqrt_D) / (_2 * b)
+                n += 1
+                candidates[n] = (-c - sqrt_D) / (_2 * b)
+                n += 1
+            if a != 0:
+                candidates[n] = -b / a
+                n += 1
 
-    f = ((_3 * c / a) - ((b**_2) / (a**_2))) / _3
-    g = ((_2 * (b**_3)) / (a**_3) - (_9 * b * c / (a**_2)) + (_27 * d / a)) / _27
-    h = ((g**_2) / _4) + ((f**_3) / _27)
+    if a != 0:
+        f = ((_3 * c / a) - ((b * b) / (a * a))) / _3
+        g = ((_2 * (b * b * b)) / (a * a * a) - (_9 * b * c / (a * a)) + (_27 * d / a)) / _27
+        h = ((g * g) / _4) + ((f * f * f) / _27)
+        # Relative tolerance on the discriminant: near-double roots must take the
+        # three-real-roots branch, else a positive root can be missed entirely.
+        h_scale = (g * g) / _4 + abs(f * f * f) / _27
 
-    if f == 0 and g == 0 and h == 0:
-        x = -b / (_3 * a)
-        return x if x >= 0 else _inf
-    elif h <= 0:
-        i = np.sqrt(g**_2 / _4 - h)
-        j = np.cbrt(i)
-        k = np.arccos(-(g / (_2 * i)))
-        M = np.cos(k / _3)
-        N = np.sqrt(_3) * np.sin(k / _3)
-        P = -(b / (_3 * a))
-        x1 = P + _2 * j * M
-        x2 = P - j * (M + N)
-        x3 = P - j * (M - N)
-        x1 = x1 if x1 >= 0 else _inf
-        x2 = x2 if x2 >= 0 else _inf
-        x3 = x3 if x3 >= 0 else _inf
-        return min(x1, x2, x3)
-    else:
-        S = np.cbrt(-(g / _2) + np.sqrt(h))
-        U = np.cbrt(-(g / _2) - np.sqrt(h))
-        x = (S + U) - (b / (_3 * a))
-        return x if x >= 0 else _inf
+        if f == 0 and g == 0 and h == 0:
+            candidates[n] = -b / (_3 * a)
+            n += 1
+        elif h <= np.float64(1e-12) * h_scale:
+            i = np.sqrt(max((g * g) / _4 - h, _0))
+            k = np.arccos(min(max(-(g / (_2 * i)), -_1), _1)) if i != 0 else _0
+            j = np.cbrt(i)
+            M = np.cos(k / _3)
+            N = np.sqrt(_3) * np.sin(k / _3)
+            P = -(b / (_3 * a))
+            candidates[n] = P + _2 * j * M
+            n += 1
+            candidates[n] = P - j * (M + N)
+            n += 1
+            candidates[n] = P - j * (M - N)
+            n += 1
+        else:
+            S = np.cbrt(-(g / _2) + np.sqrt(h))
+            U = np.cbrt(-(g / _2) - np.sqrt(h))
+            candidates[n] = (S + U) - (b / (_3 * a))
+            n += 1
+
+    best = _inf
+    for idx in range(n):
+        x = candidates[idx]
+        if not np.isfinite(x):
+            continue
+        for _ in range(8):
+            fx = ((a * x + b) * x + c) * x + d
+            fpx = (_3 * a * x + _2 * b) * x + c
+            if fpx == 0:
+                break
+            x = x - fx / fpx
+        # Accept only converged roots: an inexact candidate (e.g. -b/a for the far
+        # root) that Newton failed to converge must not masquerade as a root.
+        fx = ((a * x + b) * x + c) * x + d
+        fx_scale = abs(a * x * x * x) + abs(b * x * x) + abs(c * x) + abs(d)
+        if abs(fx) > np.float64(1e-6) * fx_scale:
+            continue
+        if x >= 0 and x < best:
+            best = x
+    return np.float32(best)
 
 
 # =============================================================================
@@ -794,8 +876,10 @@ def _get_valid_poly_reproj(old_camera, new_camera, effective_imshape_old, effect
         pu_new_of_new, pn_new_of_new = get_valid_distortion_region(new_camera)
         su_new_of_new = shapely.Polygon(pu_new_of_new)
         su_new_of_inters = shapely.make_valid(su_new_of_old) & shapely.make_valid(su_new_of_new)
-        f = new_camera.intrinsic_matrix[0, 0]
-        su_new_of_inters = shapely.segmentize(su_new_of_inters, max_segment_length=0.05 * f)
+        # The geometry here is in normalized (undistorted) coordinates, so the segment
+        # length threshold is in normalized units too (corresponds to ~0.05*f in pixels).
+        # Densification matters: the subsequent distortion map bends straight edges.
+        su_new_of_inters = shapely.segmentize(su_new_of_inters, max_segment_length=0.05)
         s_new_of_inters = shape_undistorted_to_image(new_camera, su_new_of_inters)
     else:
         s_new_of_inters = shape_undistorted_to_image(new_camera, su_new_of_old)
@@ -1117,9 +1201,12 @@ def get_optimal_undistorted_intrinsics(
     # Create undistorted camera with square pixels and no skew
     new_camera = old_camera.undistorted(square_pixels=True, zero_skew=True)
 
-    # Get valid region polygon and its bounding box (outer_box)
-    valid_poly: shapely.Polygon = get_valid_poly_reproj(
-        old_camera, new_camera, old_imshape, imshape_new=None
+    # Get valid region polygon and its bounding box (outer_box). The region must be unbounded
+    # in the new image space (it defines outer_box for alpha=1), hence imshape None for the
+    # new camera; the inherited image_shape would clip it to the old rectangle otherwise.
+    effective_old_imshape = old_imshape if old_imshape is not None else old_camera.image_shape
+    valid_poly: shapely.Polygon = _get_valid_poly_reproj(
+        old_camera, new_camera, effective_old_imshape, None
     )
     x1, y1, x2, y2 = valid_poly.bounds
     outer_box = np.array([x1, y1, x2 - x1, y2 - y1], np.float32)

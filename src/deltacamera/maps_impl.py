@@ -339,11 +339,12 @@ def _z_factors_pinhole(h, w, K_new, R_rel_row2):
     fy = K_new[1, 1]
     cx = K_new[0, 2]
     cy = K_new[1, 2]
+    skew = K_new[0, 1]
     result = np.empty((h, w), np.float32)
     for y in range(h):
         for x in range(w):
-            xn = (np.float32(x) - cx) / fx
             yn = (np.float32(y) - cy) / fy
+            xn = (np.float32(x) - cx - skew * yn) / fx
             result[y, x] = R_rel_row2[0] * xn + R_rel_row2[1] * yn + R_rel_row2[2]
     return result
 
