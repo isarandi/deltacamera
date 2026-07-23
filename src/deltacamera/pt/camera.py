@@ -183,31 +183,39 @@ class Camera:
     # =================================================================
 
     def _get_valid_region(self):
+        # no_grad: the valid region is a non-differentiable mask/clamp constant; computing it
+        # differentiably poisons gradients (NaN through the boundary search) without adding
+        # any meaningful gradient path.
         if self.d is None:
             return None
-        if self.has_fisheye_distortion():
-            return validity_module.fisheye_valid_r_max(self.d)
-        d_padded = dist_module._pad_distortion_coeffs(self.d, 14)
-        return validity_module.brown_conrady_valid_region(d_padded)
+        with torch.no_grad():
+            if self.has_fisheye_distortion():
+                return validity_module.fisheye_valid_r_max(self.d)
+            d_padded = dist_module._pad_distortion_coeffs(self.d, 14)
+            return validity_module.brown_conrady_valid_region(d_padded)
 
     def _distort(self, norm_pts):
         if self.d is None:
             return norm_pts
         if self.has_fisheye_distortion():
-            ru, _ = validity_module.fisheye_valid_r_max(self.d)
+            with torch.no_grad():
+                ru, _ = validity_module.fisheye_valid_r_max(self.d)
             return dist_module.distort_fisheye(norm_pts, self.d, ru_valid=ru)
         d_padded = dist_module._pad_distortion_coeffs(self.d, 14)
-        vr = validity_module.brown_conrady_valid_region(d_padded)
+        with torch.no_grad():
+            vr = validity_module.brown_conrady_valid_region(d_padded)
         return dist_module.distort_brown_conrady(norm_pts, d_padded, valid_region=vr)
 
     def _undistort(self, norm_pts):
         if self.d is None:
             return norm_pts
         if self.has_fisheye_distortion():
-            ru, rd = validity_module.fisheye_valid_r_max(self.d)
+            with torch.no_grad():
+                ru, rd = validity_module.fisheye_valid_r_max(self.d)
             return dist_module.undistort_fisheye(norm_pts, self.d, ru, rd)
         d_padded = dist_module._pad_distortion_coeffs(self.d, 14)
-        vr = validity_module.brown_conrady_valid_region(d_padded)
+        with torch.no_grad():
+            vr = validity_module.brown_conrady_valid_region(d_padded)
         return dist_module.undistort_brown_conrady(norm_pts, d_padded, vr)
 
     # =================================================================
@@ -663,6 +671,8 @@ def _unit_vec(v):
 def _rodrigues(axis_angle):
     """Convert axis-angle vector to 3x3 rotation matrix (Rodrigues formula)."""
     angle = torch.linalg.norm(axis_angle)
+    if angle == 0:
+        return torch.eye(3, device=axis_angle.device, dtype=axis_angle.dtype)
     k = axis_angle / angle
     K = torch.stack([
         torch.zeros_like(k[0]), -k[2], k[1],

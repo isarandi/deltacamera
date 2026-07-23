@@ -34,6 +34,28 @@ def _pad_distortion_coeffs(d, n=14):
     return torch.cat([d, zeros], dim=-1)
 
 
+def _hypot_safe(x, y):
+    """torch.hypot with a well-defined zero gradient at the exact origin.
+
+    The partials of hypot at (0, 0) are 0/0 = NaN, and a NaN partial poisons the
+    backward pass even through an unselected torch.where branch, so the input is
+    sanitized before the op (divide-no-nan pattern).
+    """
+    at_origin = (x == 0) & (y == 0)
+    x_safe = torch.where(at_origin, torch.ones_like(x), x)
+    return torch.where(at_origin, torch.zeros_like(x), torch.hypot(x_safe, y))
+
+
+def _atan2_safe(y, x):
+    """torch.atan2 with a well-defined zero gradient at the exact origin (angle 0 there).
+
+    Same rationale as _hypot_safe: the partials of atan2 at (0, 0) are NaN.
+    """
+    at_origin = (x == 0) & (y == 0)
+    x_safe = torch.where(at_origin, torch.ones_like(x), x)
+    return torch.where(at_origin, torch.zeros_like(y), torch.atan2(y, x_safe))
+
+
 # =============================================================================
 # Tilt matrix helpers (14-param Brown-Conrady)
 # =============================================================================
@@ -127,8 +149,8 @@ def _clip_to_polar_region(points, r_valid, t_valid):
         (..., 2) clipped points
     """
     x, y = points[..., 0], points[..., 1]
-    r = torch.hypot(x, y)
-    t = torch.atan2(y, x)
+    r = _hypot_safe(x, y)
+    t = _atan2_safe(y, x)
     r_max = interp_1d(t, t_valid, r_valid)
     scale = torch.where(r > r_max, r_max / r.clamp(min=1e-12), torch.ones_like(r))
     return points * scale.unsqueeze(-1)
@@ -146,8 +168,8 @@ def _invalidate_outside_polar_region(points, r_valid, t_valid):
         (..., 2) with NaN for invalid points
     """
     x, y = points[..., 0], points[..., 1]
-    r = torch.hypot(x, y)
-    t = torch.atan2(y, x)
+    r = _hypot_safe(x, y)
+    t = _atan2_safe(y, x)
     r_max = interp_1d(t, t_valid, r_valid)
     invalid = r > r_max
     return torch.where(invalid.unsqueeze(-1), float('nan'), points)
@@ -201,8 +223,8 @@ def distort_brown_conrady(pu, d, valid_region=None):
 def _invalidate_outside_polar_region_input(input_pts, output_pts, r_valid, t_valid):
     """Set output to NaN where input points are outside valid region."""
     x, y = input_pts[..., 0], input_pts[..., 1]
-    r = torch.hypot(x, y)
-    t = torch.atan2(y, x)
+    r = _hypot_safe(x, y)
+    t = _atan2_safe(y, x)
     r_max = interp_1d(t, t_valid, r_valid)
     invalid = r > r_max
     return torch.where(invalid.unsqueeze(-1), float('nan'), output_pts)
@@ -387,11 +409,14 @@ def distort_fisheye(pu, d, ru_valid=None):
     """
     x = pu[..., 0]
     y = pu[..., 1]
-    r = torch.hypot(x, y)
+    r = _hypot_safe(x, y)
     theta = torch.atan(r)
     theta2 = theta * theta
     theta_d = theta * (1 + theta2 * (d[0] + theta2 * (d[1] + theta2 * (d[2] + theta2 * d[3]))))
-    scale = torch.where(r > 1e-12, theta_d / r, torch.ones_like(r))
+    # Guard the denominator: torch.where alone doesn't prevent the discarded branch's
+    # division by zero from poisoning gradients (0 * inf = NaN in backward).
+    r_safe = torch.where(r > 1e-12, r, torch.ones_like(r))
+    scale = torch.where(r > 1e-12, theta_d / r_safe, torch.ones_like(r))
     result = pu * scale.unsqueeze(-1)
 
     if ru_valid is not None:
@@ -416,7 +441,7 @@ def undistort_fisheye(pd, d, ru_valid, rd_valid, n_iter=3):
     """
     x = pd[..., 0]
     y = pd[..., 1]
-    rd = torch.hypot(x, y)
+    rd = _hypot_safe(x, y)
 
     # Mark invalid
     invalid = rd > rd_valid
@@ -434,8 +459,9 @@ def undistort_fisheye(pd, d, ru_valid, rd_valid, n_iter=3):
         fp = 1 + t2 * (3 * d0 + t2 * (5 * d1 + t2 * (7 * d2 + 9 * t2 * d3)))
         t = t - f / fp
 
-    # Recover undistorted points
-    scale = torch.where(rd > 1e-12, torch.tan(t) / rd, torch.ones_like(rd))
+    # Recover undistorted points (guarded denominator, see distort_fisheye)
+    rd_safe = torch.where(rd > 1e-12, rd, torch.ones_like(rd))
+    scale = torch.where(rd > 1e-12, torch.tan(t) / rd_safe, torch.ones_like(rd))
     result = pd * scale.unsqueeze(-1)
 
     result = torch.where(invalid.unsqueeze(-1), float('nan'), result)

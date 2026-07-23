@@ -284,12 +284,18 @@ def _d_cache_key(d):
 
 
 def _get_cached_undistort(d):
-    """Get or compute cached undistortion LUT for given distortion coefficients."""
+    """Get or compute cached undistortion LUT for given distortion coefficients.
+
+    Computed under no_grad: cached tensors must not carry autograd graphs (a stored graph
+    would leak gradients across cache hits from different source tensors and fail on
+    second backward), and the boundary search would produce NaN gradients anyway.
+    """
     key = _d_cache_key(d)
     if key not in _undistort_precomp_cache:
         if len(_undistort_precomp_cache) >= _MAX_CACHE_SIZE:
             _undistort_precomp_cache.pop(next(iter(_undistort_precomp_cache)))
-        _undistort_precomp_cache[key] = precompute_undistort(d)
+        with torch.no_grad():
+            _undistort_precomp_cache[key] = precompute_undistort(d)
     return _undistort_precomp_cache[key]
 
 
@@ -318,20 +324,26 @@ def _prepare_distortion(d) -> tuple:
 
 
 def _fisheye_valid_r_max_cached(d):
+    # no_grad: see _get_cached_undistort — the valid region is a non-differentiable
+    # mask/clamp constant and cached tensors must not carry autograd graphs.
     key = ('fisheye', _d_cache_key(d))
     if key not in _validity_cache:
         if len(_validity_cache) >= _MAX_CACHE_SIZE:
             _validity_cache.pop(next(iter(_validity_cache)))
-        _validity_cache[key] = validity.fisheye_valid_r_max(d)
+        with torch.no_grad():
+            _validity_cache[key] = validity.fisheye_valid_r_max(d)
     return _validity_cache[key]
 
 
 def _bc_valid_region_cached(d):
+    # no_grad: see _get_cached_undistort — the valid region is a non-differentiable
+    # mask/clamp constant and cached tensors must not carry autograd graphs.
     key = ('bc', _d_cache_key(d))
     if key not in _validity_cache:
         if len(_validity_cache) >= _MAX_CACHE_SIZE:
             _validity_cache.pop(next(iter(_validity_cache)))
-        _validity_cache[key] = validity.brown_conrady_valid_region(d)
+        with torch.no_grad():
+            _validity_cache[key] = validity.brown_conrady_valid_region(d)
     return _validity_cache[key]
 
 
