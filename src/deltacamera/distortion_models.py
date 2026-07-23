@@ -9,7 +9,7 @@ from typing import Optional, Tuple
 
 import cv2
 import numpy as np
-from scipy.spatial.transform import Rotation
+import scipy.linalg
 
 
 @dataclass(frozen=True, eq=False)
@@ -107,10 +107,10 @@ class BrownConradyEx(LensDistortionModel):
         Returns:
             Tuple of (new_R, new_K, new_coeffs)
         """
-        new_R = R.copy()
+        new_R = np.array(R, copy=True)
         new_R[0] *= -1
 
-        new_K = K.copy()
+        new_K = np.array(K, copy=True)
         new_K[0, 2] = (imshape[1] - 1) - new_K[0, 2]
         new_K[0, 1] *= -1  # negate skew
 
@@ -133,7 +133,7 @@ class BrownConradyEx(LensDistortionModel):
             R: 3x3 rotation matrix (world-to-camera)
             K: 3x3 intrinsic matrix
             coeffs: Distortion coefficients
-            angle: Rotation angle in radians (counter-clockwise)
+            angle: Rotation angle in radians (clockwise)
             anchor: Rotation center (x, y)
 
         Returns:
@@ -146,7 +146,7 @@ class BrownConradyEx(LensDistortionModel):
 
         # Compute rot_normalized: rotation in normalized coords that avoids K[1,0] skew
         # See docs/explanation/distortion-rotation.rst for derivation
-        new_K = K.copy()
+        new_K = np.array(K, copy=True)
         v = rot_image[1, :] @ new_K[:2, :2]
         v /= np.linalg.norm(v)
         rot_normalized = np.array([[v[1], -v[0]], v], dtype=np.float32)
@@ -154,45 +154,71 @@ class BrownConradyEx(LensDistortionModel):
         new_K[:2, :2] = rot_image @ new_K[:2, :2] @ rot_normalized.T
         new_K[:2, 2] = rot_image @ (new_K[:2, 2] - anchor) + anchor
 
-        new_R = R.copy()
+        new_R = np.array(R, copy=True)
         new_R[:2] = rot_normalized @ new_R[:2]
 
         new_coeffs = coeffs.copy()
 
-        # Handle tilt (tau_x, tau_y) if present - requires Euler angle reordering
+        # Handle tilt (tau_x, tau_y) if present
         if len(new_coeffs) >= 14 and (new_coeffs[12] != 0 or new_coeffs[13] != 0):
-            # Reorder Euler angles: XYZ -> ZXY to get new tau values
-            angle_normalized = np.arctan2(v[0], v[1])
-            angle_coeffs, new_coeffs[12], new_coeffs[13] = Rotation.from_euler(
-                'xyz', [coeffs[12], coeffs[13], angle_normalized]
-            ).as_euler('zxy')
+            # The rotated tilted model is exactly representable in the 14-param family.
+            # The tilt homography factors as T = P @ N with P affine (diagonal 2x2 part)
+            # and N = Ry(-tau_y) @ Rx(-tau_x) a rotation, so the requirement
+            #     K' @ T' @ Rz(phi) = R_img @ K @ T
+            # (with the 12-param coefficients conjugated by the same Rz(phi), and phi the
+            # normalized-frame rotation that keeps K'[1, 0] = 0) is the classic
+            # camera-matrix factorization: RQ-decompose the right-hand side into
+            # upper-triangular times rotation, read tau' and phi off the rotation via
+            # Y-X-Z Euler angles, and the affine factor is absorbed into K'.
+            def tilt_matrix(tau_x, tau_y):
+                cx, sx = np.cos(tau_x), np.sin(tau_x)
+                cy, sy = np.cos(tau_y), np.sin(tau_y)
+                return np.array(
+                    [[cx, 0.0, 0.0], [-sx * sy, cy, 0.0], [sy, -cy * sx, cy * cx]]
+                )
 
-            # rot_coeffs is the rotation to apply to tangential/thin-prism coefficients
-            rot_coeffs = Rotation.from_euler('z', angle_coeffs).as_matrix()[:2, :2]
-            rot_coeffs = rot_coeffs.astype(np.float32)
+            angle64 = np.float64(angle)
+            G = np.eye(3)
+            G[:2, :2] = (
+                np.array(
+                    [
+                        [np.cos(angle64), -np.sin(angle64)],
+                        [np.sin(angle64), np.cos(angle64)],
+                    ]
+                )
+                @ np.array(K[:2, :2], np.float64)
+            )
+            G = G @ tilt_matrix(np.float64(coeffs[12]), np.float64(coeffs[13]))
 
-            # Apply tilt homography correction to intrinsics
-            tilt_rot = Rotation.from_euler('xy', [coeffs[12], coeffs[13]]).as_matrix()
-            tilt_homography = np.array([
-                [tilt_rot[2, 2], 0, -tilt_rot[0, 2]],
-                [0, tilt_rot[2, 2], -tilt_rot[1, 2]],
-                [0, 0, 1]], dtype=np.float32)
+            U, M = scipy.linalg.rq(G)
+            signs = np.sign(np.diag(U))
+            M = M * signs[:, None]
+            if np.linalg.det(M) < 0:
+                M = -M
 
-            rot_normalized_3x3 = np.array([
-                [rot_normalized[0, 0], rot_normalized[0, 1], 0],
-                [rot_normalized[1, 0], rot_normalized[1, 1], 0],
-                [0, 0, 1]], dtype=np.float32)
+            # M = Ry(-tau_y') @ Rx(-tau_x') @ Rz(phi)
+            tau_x_new = np.arcsin(M[1, 2])
+            tau_y_new = -np.arctan2(M[0, 2], M[2, 2])
+            phi = np.arctan2(M[1, 0], M[1, 1])
 
-            tilt_homography_rotated = rot_normalized_3x3 @ tilt_homography @ rot_normalized_3x3.T
-
-            tilt_rot_new = Rotation.from_euler('xy', [new_coeffs[12], new_coeffs[13]]).as_matrix()
-            tilt_scale = 1 / tilt_rot_new[2, 2]
-            tilt_homography_new_inv = np.array([
-                [tilt_scale, 0, tilt_rot_new[0, 2] * tilt_scale],
-                [0, tilt_scale, tilt_rot_new[1, 2] * tilt_scale],
-                [0, 0, 1]], dtype=np.float32)
-
-            new_K = new_K @ tilt_homography_rotated @ tilt_homography_new_inv
+            new_coeffs[12] = np.float32(tau_x_new)
+            new_coeffs[13] = np.float32(tau_y_new)
+            rot_normalized = np.array(
+                [[np.cos(phi), -np.sin(phi)], [np.sin(phi), np.cos(phi)]], np.float32
+            )
+            rot_coeffs = rot_normalized
+            Rz3 = np.array(
+                [
+                    [np.cos(phi), -np.sin(phi), 0.0],
+                    [np.sin(phi), np.cos(phi), 0.0],
+                    [0.0, 0.0, 1.0],
+                ]
+            )
+            L = (G @ np.linalg.inv(tilt_matrix(tau_x_new, tau_y_new) @ Rz3))[:2, :2]
+            new_K[:2, :2] = L.astype(np.float32)
+            new_K[1, 0] = 0.0  # exactly zero by construction; clear the float residue
+            new_R = np.array(R, copy=True)
+            new_R[:2] = rot_normalized @ new_R[:2]
         else:
             # No tilt: use rot_normalized for tangential/thin-prism rotation
             rot_coeffs = rot_normalized

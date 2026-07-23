@@ -425,31 +425,33 @@ class Camera:
 
     @camera_transform
     def rotate_image(self, angle, imshape=None, anchor=None):
-        """Transform the camera such that the produces image will be rotated around its center
-        by `angle` radians (counter-clockwise)."""
-        angle = np.float32(angle)
-        sin = np.sin(angle)
-        cos = np.cos(angle)
-        R = np.array([[cos, -sin], [sin, cos]], dtype=np.float32)
-
-        x = R[1, :] @ self.intrinsic_matrix[:2, :2]
-        x /= np.linalg.norm(x)
-        R_ = np.array([[x[1], -x[0]], x], dtype=np.float32)
-
+        """Transform the camera such that the produced image will be rotated around its center
+        by `angle` radians (clockwise)."""
         if anchor is None:
             anchor = (np.array(imshape[::-1], np.float32) - 1) / 2
-        self.intrinsic_matrix[:2, :2] = R @ self.intrinsic_matrix[:2, :2] @ R_.T
-        self.intrinsic_matrix[:2, 2] = R @ (self.intrinsic_matrix[:2, 2] - anchor) + anchor
+        else:
+            anchor = np.asarray(anchor, dtype=np.float32)
 
         if self.has_nonfisheye_distortion():
-            # Create new distortion model with rotated coefficients
-            coeffs = self._distortion_model.coeffs.copy()
-            coeffs[[[3], [2]]] = R_ @ coeffs[[[3], [2]]]
-            if coeffs.shape[0] > 8:
-                coeffs[[[8, 9], [10, 11]]] = R_ @ coeffs[[[8, 9], [10, 11]]]
-            self._distortion_model = _dm.BrownConradyEx(coeffs)
+            new_R, new_K, new_coeffs = _dm.BrownConradyEx.transform_for_rotation(
+                self.R, self.intrinsic_matrix, self._distortion_model.coeffs, angle, anchor
+            )
+            self.intrinsic_matrix[:] = new_K
+            self.R[:] = new_R
+            self._distortion_model = _dm.BrownConradyEx(new_coeffs)
+        else:
+            angle = np.float32(angle)
+            sin = np.sin(angle)
+            cos = np.cos(angle)
+            R = np.array([[cos, -sin], [sin, cos]], dtype=np.float32)
 
-        self.R[:2] = R_ @ self.R[:2]
+            x = R[1, :] @ self.intrinsic_matrix[:2, :2]
+            x /= np.linalg.norm(x)
+            R_ = np.array([[x[1], -x[0]], x], dtype=np.float32)
+
+            self.intrinsic_matrix[:2, :2] = R @ self.intrinsic_matrix[:2, :2] @ R_.T
+            self.intrinsic_matrix[:2, 2] = R @ (self.intrinsic_matrix[:2, 2] - anchor) + anchor
+            self.R[:2] = R_ @ self.R[:2]
 
     @camera_transform
     def rotate_image90(self, imshape, k=1):
@@ -1185,7 +1187,7 @@ class Camera:
         """Return a camera adjusted for a rotated image.
 
         Args:
-            angle: Rotation angle in radians (counter-clockwise)
+            angle: Rotation angle in radians (clockwise)
             anchor: Rotation center (x, y). If None, uses image center (requires image_shape).
 
         Returns:
@@ -1233,7 +1235,7 @@ class Camera:
         Requires image_shape to be set.
 
         Args:
-            k: Number of 90-degree rotations (counter-clockwise)
+            k: Number of 90-degree rotations (clockwise, i.e., like np.rot90 with -k)
 
         Returns:
             New Camera for the rotated image
