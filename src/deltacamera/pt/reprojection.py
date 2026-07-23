@@ -58,8 +58,9 @@ def reproject_image(
     # Expand grid to batch
     grid = grid.expand(B, -1, -1, -1)
 
-    # NaN in grid → grid_sample returns 0 with padding_mode='zeros'
-    # Replace NaN with large value to trigger out-of-bounds for other padding modes
+    # grid_sample's behavior for NaN grid coordinates is undefined (bilinear+zeros
+    # yields NaN, nearest yields 0, contradicting the docs); replace NaN with a large
+    # value so those samples are consistently treated as out-of-bounds.
     grid = torch.where(torch.isnan(grid), 1e6, grid)
 
     result = F.grid_sample(image, grid, mode=mode, padding_mode=padding_mode,
@@ -103,11 +104,19 @@ def reproject_image_multi(
     out_h, out_w = output_shape
     device = images.device
 
+    # The batch size is determined by both the images and the camera lists
+    # (a single image may be broadcast over multiple camera pairs)
+    n_batch = max(
+        B,
+        len(old_cameras) if isinstance(old_cameras, (list, tuple)) else 1,
+        len(new_cameras) if isinstance(new_cameras, (list, tuple)) else 1,
+    )
+
     # Broadcast single camera to all batch elements
     if not isinstance(old_cameras, (list, tuple)):
-        old_cameras = [old_cameras] * B
+        old_cameras = [old_cameras] * n_batch
     if not isinstance(new_cameras, (list, tuple)):
-        new_cameras = [new_cameras] * B
+        new_cameras = [new_cameras] * n_batch
 
     old_ds = [c.d for c in old_cameras]
     new_ds = [c.d for c in new_cameras]
@@ -125,7 +134,7 @@ def reproject_image_multi(
             scale_mat[0, 2] = (a - 1) / 2.0
             scale_mat[1, 2] = (a - 1) / 2.0
             grids = []
-            for i in range(B):
+            for i in range(n_batch):
                 g = maps.make_remap_grid(
                     old_cameras[i].K, old_cameras[i].R, old_cameras[i].d,
                     scale_mat @ new_cameras[i].K, new_cameras[i].R,
@@ -135,7 +144,7 @@ def reproject_image_multi(
                 grids.append(g)
         else:
             grids = []
-            for i in range(B):
+            for i in range(n_batch):
                 g = maps.make_remap_grid(
                     old_cameras[i].K, old_cameras[i].R, old_cameras[i].d,
                     new_cameras[i].K, new_cameras[i].R, new_cameras[i].d,
@@ -265,14 +274,29 @@ def reproject_depth_map(
         hr_h, hr_w = out_h, out_w
         hr_new_K = new_K
 
-    # Warp at high resolution (antialias_factor=1 to avoid avg_pool2d;
-    # we do nanmedian downsampling ourselves below)
-    warped = reproject_image(
-        depth, old_K, old_R, old_d, hr_new_K, new_R, new_d,
-        (hr_h, hr_w), antialias_factor=1, mode=mode)
-
-    # grid_sample produces 0 for out-of-bounds pixels; replace with NaN for depth
-    warped = torch.where(warped == 0, float('nan'), warped)
+    # Warp at high resolution with an analytic out-of-bounds mask. grid_sample's zero
+    # padding cannot mark invalid pixels for depth: a 0 sentinel destroys legitimate
+    # zero depths, and bilinear samples that partially leave the image blend with the
+    # padding into finite garbage. Instead, compute the grid in raw pixel coordinates
+    # and mark exactly the samples whose interpolation taps fall outside the image
+    # (matching cv2.remap's borderValue=NaN semantics).
+    in_h, in_w = depth.shape[2], depth.shape[3]
+    grid_px = maps.make_remap_grid(
+        old_K, old_R, old_d, hr_new_K, new_R, new_d, hr_h, hr_w, old_imshape=None)
+    x, y = grid_px[..., 0], grid_px[..., 1]
+    if mode == 'nearest':
+        valid = (x > -0.5) & (x < in_w - 0.5) & (y > -0.5) & (y < in_h - 0.5)
+    else:
+        # bilinear: invalid if any of the 2x2 taps falls outside the image
+        valid = (x >= 0) & (x <= in_w - 1) & (y >= 0) & (y <= in_h - 1)
+    # NaN grid coords (invalid distortion region) fail the comparisons -> invalid;
+    # replace them before sampling since grid_sample's NaN handling is undefined.
+    grid = maps._normalize_grid(grid_px, in_h, in_w)
+    grid = torch.nan_to_num(grid, nan=2.0)
+    warped = F.grid_sample(
+        depth, grid.expand(depth.shape[0], -1, -1, -1),
+        mode=mode, padding_mode='zeros', align_corners=True)
+    warped = torch.where(valid.unsqueeze(1), warped, float('nan'))
 
     # Compute z-correction factors at the high-res size
     z_factors = maps.make_z_factors(old_R, hr_new_K, new_R, new_d, hr_h, hr_w)

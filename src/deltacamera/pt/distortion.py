@@ -269,7 +269,7 @@ def distort_brown_conrady_with_jacobian(pu, d):
     x13 = 1.0 / (r2 * x11 + 1)
     x29 = x13 * (r2 * x7 + 1)
     x14 = x * 2 * k3 + y * 2 * k2 + x29
-    x26 = x13 * x13 * ((r2 * (k4_r2 + x6) + x7) - x29 * x29 * (r2 * (k7_r2 + x10) + x11))
+    x26 = x13 * ((r2 * (k4_r2 + x6) + x7) - x29 * (r2 * (k7_r2 + x10) + x11))
     x19 = x * x26 + k3
     x21 = y * x26 + k2
     x27 = k9_r2 + x2

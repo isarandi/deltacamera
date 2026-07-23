@@ -32,9 +32,11 @@ def brown_conrady_valid_region(
     device = d.device
     dtype = d.dtype
 
-    # Limit search to rational model asymptote
+    # Limit search to rational model asymptote (denominator zero). Back off
+    # slightly from the exact root: evaluating at the pole itself makes the Jacobian
+    # determinant blow up and corrupts the boundary search.
     asymptote_limit = torch.sqrt(
-        solve_cubic_smallest_nonneg_root(d[7], d[6], d[5], 1.0))
+        solve_cubic_smallest_nonneg_root(d[7], d[6], d[5], 1.0)) * 0.999
     limit = torch.minimum(
         torch.tensor(limit, device=device, dtype=dtype), asymptote_limit)
 
@@ -52,12 +54,34 @@ def brown_conrady_valid_region(
                                  device=device, dtype=dtype)[:-1]
     radii_dense = dist_module.interp_1d(theta_dense, theta_coarse_wrap, radii_coarse_wrap)
 
-    # Replace inf with limit, refine all with Newton, restore inf positions
-    is_inf = torch.isinf(radii_dense)
+    # Replace non-finite with limit, refine all with Newton, restore those positions.
+    # Non-finite includes NaN: interp_1d's lerp turns inf sample values (angles where the
+    # line search found no fold) into NaN via inf - inf, unlike np.interp which keeps inf.
+    is_inf = ~torch.isfinite(radii_dense)
     radii_init = torch.where(is_inf, limit, radii_dense)
     radii_refined = _newton_refine(radii_init, theta_dense, d, n_iter_newton)
     radii_dense = torch.where(is_inf, limit, radii_refined)
     radii_dense = radii_dense.clamp(min=torch.tensor(0, device=device, dtype=dtype), max=limit)
+
+    # The sensor tilt (tau_x, tau_y) is a projective map applied after the 12-coefficient
+    # distortion. Its Jacobian blows up (rather than crossing zero) at the tilt horizon, so
+    # the det-based search above runs past it. Shrink each boundary radius until the
+    # 12-coefficient distorted point stays clearly on the visible side of the horizon,
+    # otherwise the boundary polygon folds over when mapped through the tilt.
+    if d.shape[0] > 12 and (d[12] != 0 or d[13] != 0):
+        t20 = torch.sin(d[13])
+        t21 = -torch.cos(d[13]) * torch.sin(d[12])
+        t22 = torch.cos(d[12]) * torch.cos(d[13])
+        w_min = 0.1 * t22
+        d12 = d[:12]
+        for _ in range(100):
+            pu12 = _polar_to_cartesian(radii_dense, theta_dense)
+            q = dist_module.distort_brown_conrady(pu12, d12, valid_region=None)
+            w = t20 * q[..., 0] + t21 * q[..., 1] + t22
+            needs_shrink = w < w_min
+            if not needs_shrink.any():
+                break
+            radii_dense = torch.where(needs_shrink, radii_dense * 0.95, radii_dense)
 
     # Map boundary to distorted space
     pu = _polar_to_cartesian(radii_dense, theta_dense)
@@ -239,8 +263,9 @@ def _jacobian_det_polar_impl(r, t, d, sy, cy_sx, cy_cx):
     y_d = r * x0 * (a + b) + c2
 
     z = sy * x_d - cy_sx * y_d + cy_cx
+    # det(J_tilt) = det(M_tilt) / z^3 = (cy*cx)^2 / z^3
     inv_z = 1.0 / z
-    det_tilt = inv_z * inv_z * inv_z
+    det_tilt = cy_cx * cy_cx * inv_z * inv_z * inv_z
 
     return det_12 * det_tilt
 
@@ -380,10 +405,12 @@ def _jacobian_det_and_deriv_polar_impl(r, t, d, sy, cy_sx, cy_cx):
     z = sy * x_d - cy_sx * y_d + cy_cx
     dz_dr = sy * dx_d_dr - cy_sx * dy_d_dr
 
+    # det(J_tilt) = det(M_tilt) / z^3 = (cy*cx)^2 / z^3
+    det_M = cy_cx * cy_cx
     inv_z = 1.0 / z
     inv_z3 = inv_z * inv_z * inv_z
-    det_tilt = inv_z3
-    ddet_tilt_dr = -3.0 * inv_z3 * inv_z * dz_dr
+    det_tilt = det_M * inv_z3
+    ddet_tilt_dr = -3.0 * det_M * inv_z3 * inv_z * dz_dr
 
     fval = fval_12 * det_tilt
     deriv = deriv_12 * det_tilt + fval_12 * ddet_tilt_dr
@@ -398,72 +425,89 @@ def _jacobian_det_and_deriv_polar_impl(r, t, d, sy, cy_sx, cy_cx):
 def solve_cubic_smallest_nonneg_root(a, b, c, d_coeff):
     """Solve ax^3 + bx^2 + cx + d = 0, return smallest non-negative root or inf.
 
-    Branchless implementation using torch.where. All inputs can be tensors or scalars.
-    Returns a scalar tensor on the same device.
+    Mirrors the numpy implementation in validity.py: computed in float64, a leading
+    coefficient that is tiny relative to the others (common case: the k6 rational
+    distortion coefficient) is handled by a quadratic branch, near-double roots take
+    the three-real-roots branch via a discriminant tolerance, and all candidate roots
+    are Newton-polished on the full cubic before selection. Returns a float64 scalar
+    tensor on the same device.
     """
-    inf = torch.tensor(float('inf'), device=_get_device(a, b, c, d_coeff))
+    device = _get_device(a, b, c, d_coeff)
+    a = torch.as_tensor(a, dtype=torch.float64, device=device)
+    b = torch.as_tensor(b, dtype=torch.float64, device=device)
+    c = torch.as_tensor(c, dtype=torch.float64, device=device)
+    d = torch.as_tensor(d_coeff, dtype=torch.float64, device=device)
+    inf = torch.tensor(float('inf'), dtype=torch.float64, device=device)
 
-    # Ensure all are tensors
-    a = torch.as_tensor(a, dtype=torch.float64)
-    b = torch.as_tensor(b, dtype=torch.float64)
-    c = torch.as_tensor(c, dtype=torch.float64)
-    d = torch.as_tensor(d_coeff, dtype=torch.float64)
+    candidates = []
+    if abs(a) <= 1e-3 * max(abs(b), abs(c), abs(d)):
+        # Small leading coefficient: Cardano's h discriminant cancels catastrophically
+        # (even in float64 once |a| is ~1e-8 of the rest), so additionally seed the
+        # near-quadratic root estimates and the far root ~ -b/a. All candidates are
+        # Newton-polished and residual-checked below, so inexact or duplicate seeds
+        # (in the overlap region where Cardano also works) are harmless.
+        if b == 0:
+            if c != 0:
+                candidates.append(-d / c)
+        else:
+            D = c * c - 4 * b * d
+            if D >= 0:
+                sqrt_D = torch.sqrt(D)
+                candidates.append((-c + sqrt_D) / (2 * b))
+                candidates.append((-c - sqrt_D) / (2 * b))
+            if a != 0:
+                candidates.append(-b / a)
 
-    # Linear case: cx + d = 0 → x = -d/c
-    x_lin = -d / (c + 1e-30)
-    r_lin = torch.where(x_lin >= 0, x_lin, inf)
+    if a != 0:
+        f = (3 * c / a - (b * b) / (a * a)) / 3
+        g = (2 * (b * b * b) / (a * a * a) - 9 * b * c / (a * a) + 27 * d / a) / 27
+        h = g * g / 4 + f * f * f / 27
+        # Relative tolerance on the discriminant: near-double roots must take the
+        # three-real-roots branch, else a positive root can be missed entirely.
+        h_scale = g * g / 4 + abs(f * f * f) / 27
 
-    # Quadratic case: bx^2 + cx + d = 0
-    disc_q = c * c - 4 * b * d
-    sq_q = torch.sqrt(torch.clamp(disc_q, min=0.0))
-    b2 = 2 * b + 1e-30
-    x_q1 = (-c + sq_q) / b2
-    x_q2 = (-c - sq_q) / b2
-    x_q1 = torch.where(x_q1 >= 0, x_q1, inf)
-    x_q2 = torch.where(x_q2 >= 0, x_q2, inf)
-    r_quad = torch.where(disc_q >= 0, torch.minimum(x_q1, x_q2), inf)
+        if f == 0 and g == 0 and h == 0:
+            candidates.append(-b / (3 * a))
+        elif h <= 1e-12 * h_scale:
+            i_val = torch.sqrt(torch.clamp(g * g / 4 - h, min=0.0))
+            if i_val != 0:
+                k = torch.acos(torch.clamp(-g / (2 * i_val), -1.0, 1.0))
+            else:
+                k = torch.zeros_like(g)
+            j = i_val.pow(1.0 / 3.0)
+            M = torch.cos(k / 3)
+            N = 1.7320508075688772 * torch.sin(k / 3)  # sqrt(3)
+            P = -b / (3 * a)
+            candidates.append(P + 2 * j * M)
+            candidates.append(P - j * (M + N))
+            candidates.append(P - j * (M - N))
+        else:
+            sq_h = torch.sqrt(h)
+            val_s = -g / 2 + sq_h
+            val_u = -g / 2 - sq_h
+            S = torch.sign(val_s) * torch.abs(val_s).pow(1.0 / 3.0)
+            U = torch.sign(val_u) * torch.abs(val_u).pow(1.0 / 3.0)
+            candidates.append((S + U) - b / (3 * a))
 
-    # Cubic case: Cardano's formula
-    a_safe = a + 1e-30
-    ba = b / a_safe
-    ca = c / a_safe
-    da = d / a_safe
-    f = (3 * ca - ba * ba) / 3
-    g = (2 * ba * ba * ba - 9 * ba * ca + 27 * da) / 27
-    h = g * g / 4 + f * f * f / 27
-    P = -ba / 3
-
-    # h > 0: one real root (Cardano)
-    sq_h = torch.sqrt(torch.clamp(h, min=0.0))
-    val_s = -g / 2 + sq_h
-    val_u = -g / 2 - sq_h
-    S = torch.sign(val_s) * torch.abs(val_s).pow(1.0 / 3.0)
-    U = torch.sign(val_u) * torch.abs(val_u).pow(1.0 / 3.0)
-    x_one = (S + U) + P
-    r_one = torch.where(x_one >= 0, x_one, inf)
-
-    # h <= 0: three real roots (trigonometric)
-    i_val = torch.sqrt(torch.clamp(g * g / 4 - h, min=0.0))
-    j = torch.sign(i_val) * torch.abs(i_val).pow(1.0 / 3.0)
-    arg = torch.clamp(-g / (2 * i_val + 1e-30), -1.0, 1.0)
-    k = torch.acos(arg)
-    M = torch.cos(k / 3)
-    N = torch.sin(k / 3) * 1.7320508075688772  # sqrt(3)
-    x_t1 = P + 2 * j * M
-    x_t2 = P - j * (M + N)
-    x_t3 = P - j * (M - N)
-    x_t1 = torch.where(x_t1 >= 0, x_t1, inf)
-    x_t2 = torch.where(x_t2 >= 0, x_t2, inf)
-    x_t3 = torch.where(x_t3 >= 0, x_t3, inf)
-    r_three = torch.minimum(torch.minimum(x_t1, x_t2), x_t3)
-
-    r_cubic = torch.where(h <= 0, r_three, r_one)
-
-    # Select based on degree
-    is_linear = (a == 0) & (b == 0)
-    is_quadratic = (a == 0) & (b != 0)
-    result = torch.where(is_linear, r_lin, torch.where(is_quadratic, r_quad, r_cubic))
-    return result
+    best = inf
+    for x in candidates:
+        if not torch.isfinite(x):
+            continue
+        for _ in range(8):
+            fx = ((a * x + b) * x + c) * x + d
+            fpx = (3 * a * x + 2 * b) * x + c
+            if fpx == 0:
+                break
+            x = x - fx / fpx
+        # Accept only converged roots: an inexact candidate (e.g. -b/a for the far
+        # root) that Newton failed to converge must not masquerade as a root.
+        fx = ((a * x + b) * x + c) * x + d
+        fx_scale = abs(a * x * x * x) + abs(b * x * x) + abs(c * x) + abs(d)
+        if abs(fx) > 1e-6 * fx_scale:
+            continue
+        if x >= 0 and x < best:
+            best = x
+    return best
 
 
 def _get_device(*args):
