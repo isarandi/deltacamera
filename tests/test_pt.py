@@ -2,7 +2,8 @@
 
 import numpy as np
 import pytest
-import torch
+
+torch = pytest.importorskip('torch')  # the torch backend is optional
 
 import deltacamera
 import deltacamera.pt as pt
