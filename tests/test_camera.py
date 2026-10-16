@@ -612,3 +612,69 @@ class TestImageTransforms:
         diff = np.abs(reprojected[margin:-margin, margin:-margin].astype(float) -
                       expected[margin:-margin, margin:-margin].astype(float))
         assert np.mean(diff) < 3.0, f"Mean pixel diff {np.mean(diff):.2f} > 3.0"
+
+
+class TestReframed:
+    """Camera.reframed: same pose, intrinsics that fit the source frame into a viewport."""
+
+    @staticmethod
+    def frame_extremes(src, dst):
+        """Where the outer edges of the source frame land in the reframed image."""
+        h, w = src.image_shape
+        # Edge midpoints of the source frame: pixel centers are at integer coordinates,
+        # so the frame edges are at -0.5 and size - 0.5.
+        edges = np.array(
+            [[-0.5, (h - 1) / 2], [w - 0.5, (h - 1) / 2], [(w - 1) / 2, -0.5], [(w - 1) / 2, h - 0.5]],
+            np.float32,
+        )
+        rays = src.image_to_camera(edges)
+        return dst.camera_to_image(rays)
+
+    def test_same_shape_is_identity_for_centered_camera(self):
+        cam = deltacamera.Camera.from_fov(60, (480, 640))
+        for fit in ('contain', 'cover'):
+            out = cam.reframed((480, 640), fit=fit)
+            np.testing.assert_allclose(out.intrinsic_matrix, cam.intrinsic_matrix, rtol=1e-5)
+
+    @pytest.mark.parametrize('dst_shape', [(1080, 1920), (1000, 1000), (1920, 1080)])
+    def test_contain_fits_frame_inside_viewport(self, dst_shape):
+        src = deltacamera.Camera.from_fov(60, (480, 640))
+        dst = src.reframed(dst_shape, fit='contain')
+        p = self.frame_extremes(src, dst)
+        h, w = dst_shape
+        x_span = p[1, 0] - p[0, 0]
+        y_span = p[3, 1] - p[2, 1]
+        # Inside the viewport, touching it on the limiting axis
+        assert x_span <= w + 1e-3 and y_span <= h + 1e-3
+        assert np.isclose(x_span, w, atol=1e-2) or np.isclose(y_span, h, atol=1e-2)
+        # Centered
+        np.testing.assert_allclose((p[0, 0] + p[1, 0]) / 2, (w - 1) / 2, atol=1e-3)
+        np.testing.assert_allclose((p[2, 1] + p[3, 1]) / 2, (h - 1) / 2, atol=1e-3)
+
+    @pytest.mark.parametrize('dst_shape', [(1080, 1920), (1000, 1000), (1920, 1080)])
+    def test_cover_fills_viewport(self, dst_shape):
+        src = deltacamera.Camera.from_fov(60, (480, 640))
+        dst = src.reframed(dst_shape, fit='cover')
+        p = self.frame_extremes(src, dst)
+        h, w = dst_shape
+        x_span = p[1, 0] - p[0, 0]
+        y_span = p[3, 1] - p[2, 1]
+        assert x_span >= w - 1e-3 and y_span >= h - 1e-3
+        assert np.isclose(x_span, w, atol=1e-2) or np.isclose(y_span, h, atol=1e-2)
+
+    def test_keeps_pose_drops_distortion_sets_shape(self, positioned_camera):
+        distortion = deltacamera.BrownConradyEx(np.array([0.1, -0.05, 0, 0, 0], np.float32))
+        src = positioned_camera.copy(image_shape=(480, 640), distortion_model=distortion)
+        assert src.has_distortion()
+        dst = src.reframed((720, 1280))
+        np.testing.assert_allclose(dst.R, src.R)
+        np.testing.assert_allclose(dst.t, src.t)
+        assert dst.image_shape == (720, 1280)
+        assert not dst.has_distortion()
+
+    def test_requires_image_shape_and_valid_fit(self):
+        cam = deltacamera.Camera.from_fov(60, (480, 640))
+        with pytest.raises(ValueError, match='fit'):
+            cam.reframed((480, 640), fit='stretch')
+        with pytest.raises(ValueError, match='image_shape'):
+            cam.copy(image_shape=None).reframed((480, 640))

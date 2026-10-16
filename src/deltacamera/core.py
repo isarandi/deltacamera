@@ -697,6 +697,52 @@ class Camera:
         3D points in world space."""
         return coordframes.get_inv_extrinsic_matrix(self.R, self.t)
 
+    def reframed(self, imshape, fit='contain') -> "Camera":
+        """Return a camera with the same pose whose intrinsics present this
+        camera's image frame within a viewport of the given shape.
+
+        The result has a centered principal point, square pixels and no
+        distortion. Its focal length is derived from this camera's angular
+        frame extents (requires ``image_shape``; a non-centered principal
+        point makes the extents asymmetric and the larger side of each axis
+        is used). Distortion coeffs are ignored, as in :meth:`get_fov`.
+
+        Args:
+            imshape: (height, width) of the target viewport.
+            fit: 'contain' — the full source frame fits inside the viewport
+                (letterboxed/pillarboxed as needed); 'cover' — the viewport
+                is fully covered by the source frame (excess cropped).
+
+        Returns:
+            The reframed camera, with ``image_shape`` set to ``imshape``.
+        """
+        if self.image_shape is None:
+            raise ValueError('reframed() requires image_shape to be set.')
+        h_s, w_s = self.image_shape[:2]
+        fx, fy = self.intrinsic_matrix[0, 0], self.intrinsic_matrix[1, 1]
+        cx, cy = self.intrinsic_matrix[0, 2], self.intrinsic_matrix[1, 2]
+        # Pixel centers are at integer coordinates, so the frame spans -0.5 .. size-0.5
+        # (the convention of intrinsics_from_fov, whose centered principal point is at
+        # (size-1)/2).
+        tan_h = max(cx + 0.5, w_s - 0.5 - cx) / fx
+        tan_v = max(cy + 0.5, h_s - 0.5 - cy) / fy
+        h_t, w_t = imshape[:2]
+        f_candidates = (w_t / (2.0 * tan_h), h_t / (2.0 * tan_v))
+        if fit == 'contain':
+            f = min(f_candidates)
+        elif fit == 'cover':
+            f = max(f_candidates)
+        else:
+            raise ValueError(f"Unknown fit '{fit}' (use 'contain' or 'cover').")
+        intrinsics = np.array(
+            [[f, 0, (w_t - 1) / 2.0], [0, f, (h_t - 1) / 2.0], [0, 0, 1]], np.float32
+        )
+        return self.copy(
+            intrinsic_matrix=intrinsics,
+            distortion_model=None,
+            image_shape=(imshape[0], imshape[1]),
+        )
+
     def get_fov(self, imshape) -> float:
         """Get the field of view of the camera in degrees.
 
@@ -1324,6 +1370,33 @@ class Camera:
             intrinsic_matrix=intrinsics,
             world_up=world_up,
             image_shape=(imshape[0], imshape[1]),
+        )
+
+    @staticmethod
+    def looking_at(target, position, fov_degrees=55, imshape=(1080, 1920),
+                   world_up=(0, -1, 0)):
+        """Create a camera at ``position`` looking at ``target``.
+
+        The classic look-at constructor: position + target + up fully
+        determine the camera's extrinsics (upright, zero roll), and
+        ``fov_degrees`` + ``imshape`` determine the intrinsics (centered
+        principal point, square pixels).
+
+        Args:
+            target: World coordinates of the point the camera looks at.
+            position: World coordinates of the camera's optical center.
+            fov_degrees: Field of view along the larger image side, in
+                degrees.
+            imshape: (height, width) of the image.
+            world_up: World up vector.
+
+        Returns:
+            A new Camera.
+        """
+        return (
+            Camera.from_fov(fov_degrees, imshape, world_up=world_up)
+            .copy(optical_center=np.asarray(position, np.float32))
+            .turned_towards(target_world_point=np.asarray(target, np.float32))
         )
 
     @staticmethod
