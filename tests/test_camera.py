@@ -52,7 +52,7 @@ class TestCameraImageTransforms:
     def test_camera_to_image_roundtrip_no_distortion(self, simple_camera):
         """Roundtrip without distortion."""
         # Points in front of camera
-        cam_points = np.random.randn(100, 3).astype(np.float32)
+        cam_points = np.random.default_rng(0).standard_normal((100, 3)).astype(np.float32)
         cam_points[:, 2] = np.abs(cam_points[:, 2]) + 0.5  # Ensure z > 0
 
         img_points = simple_camera.camera_to_image(cam_points)
@@ -62,8 +62,9 @@ class TestCameraImageTransforms:
         # Compare normalized coordinates (x/z, y/z)
         cam_normalized = cam_points[:, :2] / cam_points[:, 2:3]
         recovered_normalized = recovered_3d[:, :2] / recovered_3d[:, 2:3]
-        # Use rtol=1e-4 for float32 precision
-        np.testing.assert_allclose(recovered_normalized, cam_normalized, rtol=1e-4)
+        # float32 precision; atol because a relative tolerance alone fails for
+        # coordinates near zero
+        np.testing.assert_allclose(recovered_normalized, cam_normalized, rtol=1e-4, atol=1e-5)
 
     def test_camera_to_image_roundtrip_with_distortion(self, distorted_camera):
         """Roundtrip with Brown-Conrady distortion in safe region."""
